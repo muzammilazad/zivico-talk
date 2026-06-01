@@ -1,0 +1,128 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  phone        String?  @unique
+  passwordHash String
+  avatarUrl    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  sentMessages         Message[]        @relation("SentMessages")
+  receivedMessages     Message[]        @relation("ReceivedMessages")
+  messageReactions     MessageReaction[]
+  contacts             Contact[]        @relation("UserContacts")
+  contactOf            Contact[]        @relation("ContactUsers")
+  sentContactRequests  ContactRequest[] @relation("SentContactRequests")
+  receivedRequests     ContactRequest[] @relation("ReceivedContactRequests")
+  outgoingCalls        CallEvent[]      @relation("OutgoingCalls")
+  incomingCalls        CallEvent[]      @relation("IncomingCalls")
+  mediaFiles           MediaFile[]
+}
+
+model Contact {
+  id            String   @id @default(uuid())
+  userId        String
+  contactUserId String
+  status        String   @default("accepted")
+  createdAt     DateTime @default(now())
+
+  user        User @relation("UserContacts", fields: [userId], references: [id], onDelete: Cascade)
+  contactUser User @relation("ContactUsers", fields: [contactUserId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, contactUserId])
+  @@index([contactUserId])
+}
+
+model ContactRequest {
+  id          String    @id @default(uuid())
+  senderId    String
+  receiverId  String
+  status      String    @default("pending")
+  createdAt   DateTime  @default(now())
+  respondedAt DateTime?
+
+  sender   User @relation("SentContactRequests", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver User @relation("ReceivedContactRequests", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@index([receiverId, status])
+  @@index([senderId, receiverId, status])
+}
+
+model Message {
+  id            String   @id @default(uuid())
+  senderId      String
+  receiverId    String
+  type          String   @default("text")
+  text          String?
+  mediaUrl      String?
+  mediaName     String?
+  mediaMimeType String?
+  mediaDurationSeconds Int?
+  replyToMessageId String?
+  isForwarded Boolean @default(false)
+  status        String   @default("sent")
+  createdAt     DateTime @default(now())
+
+  sender         User              @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver       User              @relation("ReceivedMessages", fields: [receiverId], references: [id], onDelete: Cascade)
+  replyToMessage Message?          @relation("MessageReplies", fields: [replyToMessageId], references: [id], onDelete: SetNull)
+  replies        Message[]         @relation("MessageReplies")
+  reactions      MessageReaction[]
+
+  @@index([senderId, receiverId, createdAt])
+  @@index([receiverId, senderId, createdAt])
+  @@index([replyToMessageId])
+}
+
+model MessageReaction {
+  id        String   @id @default(uuid())
+  messageId String
+  userId    String
+  emoji     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([userId])
+}
+
+model CallEvent {
+  id              String   @id @default(uuid())
+  callerId        String
+  receiverId      String
+  callType        String
+  status          String
+  durationSeconds Int      @default(0)
+  createdAt       DateTime @default(now())
+
+  caller   User @relation("OutgoingCalls", fields: [callerId], references: [id], onDelete: Cascade)
+  receiver User @relation("IncomingCalls", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@index([callerId, receiverId, createdAt])
+  @@index([receiverId, callerId, createdAt])
+}
+
+model MediaFile {
+  id         String   @id @default(uuid())
+  uploaderId String
+  url        String
+  fileName   String
+  mimeType   String
+  size       Int
+  createdAt  DateTime @default(now())
+
+  uploader User @relation(fields: [uploaderId], references: [id], onDelete: Cascade)
+}
