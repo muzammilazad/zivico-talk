@@ -1,6 +1,14 @@
-import { Circle } from "lucide-react";
+import { Circle, Headphones } from "lucide-react";
 
 function avatarFor(user, apiUrl) {
+  if (user.isOfficialSupport || user.role === "support") {
+    return (
+      <span className="avatar support-avatar">
+        <Headphones size={20} />
+      </span>
+    );
+  }
+
   if (user.avatarUrl) {
     const src = user.avatarUrl.startsWith("http") ? user.avatarUrl : `${apiUrl}${user.avatarUrl}`;
     return <img className="avatar image-avatar" src={src} alt={user.name} />;
@@ -48,6 +56,7 @@ export default function UserList({
         {users.length === 0 && <p className="empty-copy">No contacts yet. Add someone by email or phone.</p>}
         {users.map((user) => {
           const userId = String(user.id);
+          const isSupport = user.isOfficialSupport || user.role === "support";
           const online = onlineIds.has(user.id) || onlineIds.has(userId);
           const unreadCount = unreadCounts[userId] || 0;
           const preview = latestMessages[userId] || (online ? "Online" : "Offline");
@@ -56,12 +65,15 @@ export default function UserList({
             <button
               key={user.id}
               type="button"
-              className={`user-row ${String(selectedUser?.id) === userId ? "selected" : ""}`}
+              className={`user-row ${String(selectedUser?.id) === userId ? "selected" : ""} ${isSupport ? "support-row" : ""}`}
               onClick={() => onSelect(user)}
             >
               {avatarFor(user, apiUrl)}
               <span className="user-main">
-                <strong>{user.name}</strong>
+                <strong>
+                  {user.name}
+                  {isSupport && <span className="support-badge">Official Support</span>}
+                </strong>
                 <small>{preview}</small>
               </span>
               <span className="user-meta">

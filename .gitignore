@@ -1,5 +1,35 @@
+# dependencies
 node_modules/
-dist/
+backend/node_modules/
+frontend/node_modules/
 
-.DS_Store
+# build outputs
+dist/
+build/
+frontend/dist/
+frontend/build/
+
+# environment files - never push secrets
+.env
+.env.local
+.env.production
+backend/.env
+backend/.env.local
+backend/.env.production
+frontend/.env
+frontend/.env.local
+frontend/.env.production
+
+# logs
+*.log
 npm-debug.log*
+backend/server.log
+backend/server.err
+
+# uploads / user files
+uploads/
+backend/uploads/
+
+# OS / editor
+.DS_Store
+.vscode/

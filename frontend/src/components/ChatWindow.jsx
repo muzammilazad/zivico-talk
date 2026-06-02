@@ -3,6 +3,7 @@ import {
   Check,
   CheckCheck,
   Copy,
+  Edit3,
   FileUp,
   Forward,
   Image,
@@ -12,6 +13,7 @@ import {
   Paperclip,
   Phone,
   Reply,
+  Search,
   Send,
   Smile,
   SmilePlus,
@@ -47,6 +49,16 @@ function callEventLabel(event) {
 function mediaSrc(apiUrl, url) {
   if (!url) return "";
   return url.startsWith("http") ? url : `${apiUrl}${url}`;
+}
+
+function dateSeparatorLabel(value) {
+  const date = new Date(value);
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+  if (date.toDateString() === today.toDateString()) return "Today";
+  if (date.toDateString() === yesterday.toDateString()) return "Yesterday";
+  return date.toLocaleDateString();
 }
 
 function avatarFor(user, apiUrl) {
@@ -88,11 +100,14 @@ export default function ChatWindow({
   contacts,
   messages,
   messageText,
+  isTyping,
   replyToMessage,
   onMessageText,
   onSend,
   onSendMedia,
   onReactToMessage,
+  onEditMessage,
+  onDeleteMessage,
   onReplyToMessage,
   onCancelReply,
   onForwardMessage,
@@ -108,6 +123,9 @@ export default function ChatWindow({
   const [forwardQuery, setForwardQuery] = useState("");
   const [forwardReceiverIds, setForwardReceiverIds] = useState([]);
   const [highlightedMessageId, setHighlightedMessageId] = useState("");
+  const [chatSearch, setChatSearch] = useState("");
+  const [editingMessage, setEditingMessage] = useState(null);
+  const [editText, setEditText] = useState("");
   const recorderRef = useRef(null);
   const chunksRef = useRef([]);
   const timerRef = useRef(null);
@@ -141,6 +159,13 @@ export default function ChatWindow({
       String(contact.phone || "").toLowerCase().includes(query)
     );
   });
+  const visibleMessages = chatSearch.trim()
+    ? messages.filter((message) =>
+        String(message.text || message.message || message.mediaName || "")
+          .toLowerCase()
+          .includes(chatSearch.trim().toLowerCase())
+      )
+    : messages;
 
   if (!selectedUser) {
     return (
@@ -249,6 +274,25 @@ export default function ChatWindow({
     setActionMenuMessageId("");
   }
 
+  function startEdit(message) {
+    setEditingMessage(message);
+    setEditText(message.text || message.message || "");
+    setActionMenuMessageId("");
+  }
+
+  async function submitEdit(event) {
+    event.preventDefault();
+    if (!editingMessage || !editText.trim()) return;
+    await onEditMessage(editingMessage, editText.trim());
+    setEditingMessage(null);
+    setEditText("");
+  }
+
+  async function removeMessage(message, scope) {
+    await onDeleteMessage(message, scope);
+    setActionMenuMessageId("");
+  }
+
   function toggleForwardReceiver(receiverId) {
     setForwardReceiverIds((current) =>
       current.some((id) => String(id) === String(receiverId))
@@ -307,10 +351,14 @@ export default function ChatWindow({
           {avatarFor(selectedUser, apiUrl)}
           <div>
             <h2>{selectedUser.name}</h2>
-            <p>{selectedUser.email || selectedUser.phone}</p>
+            <p>{isTyping ? `${isTyping.name} is typing...` : selectedUser.online ? "online" : "last seen recently"}</p>
           </div>
         </div>
         <div className="chat-actions">
+          <label className="chat-search">
+            <Search size={16} />
+            <input value={chatSearch} onChange={(event) => setChatSearch(event.target.value)} placeholder="Search chat" />
+          </label>
           <button title="Voice call" type="button" onClick={() => onStartCall("voice")}>
             <Phone size={20} />
           </button>
@@ -325,39 +373,46 @@ export default function ChatWindow({
 
       <div className="messages" ref={messagesRef}>
         {messages.length === 0 && <p className="empty-copy timeline-empty">No messages yet.</p>}
-        {messages.map((message) => {
+        {visibleMessages.map((message, index) => {
+          const previous = visibleMessages[index - 1];
+          const createdAt = message.createdAt || message.timestamp;
+          const showSeparator =
+            !previous || new Date(previous.createdAt || previous.timestamp).toDateString() !== new Date(createdAt).toDateString();
           if (message.type === "call_event") {
             const emphasizedForCurrentUser =
               ["missed", "declined"].includes(message.status) && String(message.receiverId) === String(currentUser.id);
             const duration = message.status === "ended" ? formatDuration(message.durationSeconds) : "";
 
             return (
-              <article key={message.id} className={`call-event-card ${emphasizedForCurrentUser ? "missed" : ""}`}>
-                <strong>{callEventLabel(message)}</strong>
-                <span>
-                  {new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                  {duration ? ` - ${duration}` : ""}
-                </span>
-              </article>
+              <span key={message.id}>
+                {showSeparator && <span className="date-separator">{dateSeparatorLabel(createdAt)}</span>}
+                <article className={`call-event-card ${emphasizedForCurrentUser ? "missed" : ""}`}>
+                  <strong>{callEventLabel(message)}</strong>
+                  <span>
+                    {new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    {duration ? ` - ${duration}` : ""}
+                  </span>
+                </article>
+              </span>
             );
           }
 
           const mine = String(message.senderId) === String(currentUser.id);
-          const createdAt = message.createdAt || message.timestamp;
           const reactions = message.reactions || [];
           const showActionMenu = String(actionMenuMessageId) === String(message.id);
 
           return (
-            <article
-              key={message.id}
-              ref={(node) => {
-                if (node) messageRefs.current.set(String(message.id), node);
-                else messageRefs.current.delete(String(message.id));
-              }}
-              className={`message ${mine ? "mine" : "theirs"} ${
-                String(highlightedMessageId) === String(message.id) ? "highlighted" : ""
-              }`}
-            >
+            <span key={message.id}>
+              {showSeparator && <span className="date-separator">{dateSeparatorLabel(createdAt)}</span>}
+              <article
+                ref={(node) => {
+                  if (node) messageRefs.current.set(String(message.id), node);
+                  else messageRefs.current.delete(String(message.id));
+                }}
+                className={`message ${mine ? "mine" : "theirs"} ${
+                  String(highlightedMessageId) === String(message.id) ? "highlighted" : ""
+                }`}
+              >
               <button
                 className="message-action-trigger"
                 title="Message actions"
@@ -389,6 +444,13 @@ export default function ChatWindow({
                     React
                   </button>
                   {(message.text || message.message) && (
+                    <>
+                    {mine && (
+                      <button type="button" onClick={() => startEdit(message)}>
+                        <Edit3 size={14} />
+                        Edit
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => {
@@ -398,6 +460,17 @@ export default function ChatWindow({
                     >
                       <Copy size={14} />
                       Copy
+                    </button>
+                    </>
+                  )}
+                  <button type="button" onClick={() => removeMessage(message, "me")}>
+                    <Trash2 size={14} />
+                    Delete for me
+                  </button>
+                  {mine && (
+                    <button type="button" onClick={() => removeMessage(message, "everyone")}>
+                      <Trash2 size={14} />
+                      Delete for everyone
                     </button>
                   )}
                 </span>
@@ -432,7 +505,7 @@ export default function ChatWindow({
                   <small>{messagePreview(message.replyToMessage)}</small>
                 </button>
               )}
-              {renderMessageContent(message)}
+              {message.isDeletedForEveryone ? <p className="deleted-message">This message was deleted</p> : renderMessageContent(message)}
               {reactions.length > 0 && (
                 <span className="message-reactions">
                   {reactions.map((reaction) => (
@@ -444,9 +517,11 @@ export default function ChatWindow({
               )}
               <span className="message-meta">
                 {new Date(createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                {message.editedAt && " edited"}
                 {mine && <MessageStatus status={message.status} />}
               </span>
-            </article>
+              </article>
+            </span>
           );
         })}
       </div>
@@ -531,6 +606,20 @@ export default function ChatWindow({
         )}
       </form>
       {uploadError && <p className="upload-error">{uploadError}</p>}
+      {editingMessage && (
+        <div className="modal-backdrop">
+          <form className="contact-modal" onSubmit={submitEdit}>
+            <header className="modal-header">
+              <h2>Edit Message</h2>
+              <button type="button" onClick={() => setEditingMessage(null)}>
+                Close
+              </button>
+            </header>
+            <input value={editText} onChange={(event) => setEditText(event.target.value)} />
+            <button type="submit">Save</button>
+          </form>
+        </div>
+      )}
       {forwardMessage && (
         <div className="modal-backdrop">
           <section className="contact-modal forward-modal">

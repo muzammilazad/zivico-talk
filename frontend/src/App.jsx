@@ -1,5 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Camera } from "lucide-react";
+import {
+  Bell,
+  BellRing,
+  Camera,
+  CheckCircle2,
+  FileText,
+  LayoutDashboard,
+  LogOut,
+  MessageSquare,
+  Phone,
+  Search,
+  Settings,
+  Shield,
+  UserCircle,
+  Users
+} from "lucide-react";
 import AuthPanel from "./components/AuthPanel";
 import ChatWindow from "./components/ChatWindow";
 import UserList from "./components/UserList";
@@ -78,6 +93,10 @@ function currentUserAvatar(user) {
   return <span className="topbar-avatar">{user.name.slice(0, 1).toUpperCase()}</span>;
 }
 
+function normalizeRole(role) {
+  return role || "client";
+}
+
 function conversationStateFromSummaries(summaries) {
   return summaries.reduce(
     (state, summary) => {
@@ -92,21 +111,13 @@ function conversationStateFromSummaries(summaries) {
   );
 }
 
-function mergeMessage(currentMessages, nextMessage) {
+function mergeMessageById(currentMessages, nextMessage) {
   const message = normalizeMessage(nextMessage);
-  const exists = currentMessages.some(
-    (item) =>
-      String(item.id) === String(message.id) ||
-      (item.clientId && message.clientId && String(item.clientId) === String(message.clientId))
-  );
+  const exists = currentMessages.some((item) => String(item.id) === String(message.id));
 
   if (!exists) return [...currentMessages, message];
 
-  return currentMessages.map((item) => {
-    const sameId = String(item.id) === String(message.id);
-    const sameClientId = item.clientId && message.clientId && String(item.clientId) === String(message.clientId);
-    return sameId || sameClientId ? { ...item, ...message } : item;
-  });
+  return currentMessages.map((item) => (String(item.id) === String(message.id) ? { ...item, ...message } : item));
 }
 
 function applyReactionToMessages(currentMessages, reaction, action) {
@@ -133,6 +144,185 @@ function applyReactionToMessages(currentMessages, reaction, action) {
   });
 }
 
+function activityLabel(item) {
+  if (item.type === "call_event") return getPreviewText(item);
+  if (item.isForwarded) return "Forwarded message";
+  return getPreviewText(item) || "New message";
+}
+
+function StatCard({ label, value, icon: Icon }) {
+  return (
+    <article className="stat-card">
+      <span className="stat-icon">{Icon ? <Icon size={20} /> : null}</span>
+      <div>
+        <strong>{value}</strong>
+        <small>{label}</small>
+      </div>
+    </article>
+  );
+}
+
+function DashboardView({ metrics, contacts, unreadTotal, missedCalls, todayCalls }) {
+  const data = metrics || {};
+  const cards = [
+    ["Total Contacts", data.totalContacts ?? contacts.length, Users],
+    ["Unread Messages", data.unreadMessages ?? unreadTotal, MessageSquare],
+    ["Missed Calls", data.missedCalls ?? missedCalls, Phone],
+    ["Today's Calls", data.todaysCalls ?? todayCalls, Phone],
+    ["Pending Requests", data.pendingRequests ?? 0, Bell],
+    ["Recent Activity", data.recentActivity?.length ?? 0, FileText]
+  ];
+
+  return (
+    <section className="dashboard-view">
+      <div className="welcome-panel">
+        <div>
+          <span className="eyebrow">Welcome back</span>
+          <h1>Zivico Talk</h1>
+          <p>Client-ready communication with private chats, calls, media sharing, and operational visibility.</p>
+        </div>
+        <span className="hero-mark">ZT</span>
+      </div>
+      <div className="stats-grid">
+        {cards.map(([label, value, icon]) => (
+          <StatCard key={label} label={label} value={value} icon={icon} />
+        ))}
+      </div>
+      <section className="activity-panel">
+        <header>
+          <h2>Recent Activity</h2>
+        </header>
+        <div className="activity-list">
+          {(data.recentActivity || []).length === 0 && <p className="empty-copy">No recent activity yet.</p>}
+          {(data.recentActivity || []).map((item) => (
+            <article key={`${item.type || "message"}-${item.id}`} className="activity-item">
+              <span className="activity-dot" />
+              <div>
+                <strong>{activityLabel(item)}</strong>
+                <small>{new Date(item.createdAt).toLocaleString()}</small>
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+    </section>
+  );
+}
+
+function NotificationsPanel({ notifications, onRead, onClear }) {
+  const unread = notifications.filter((item) => !item.isRead).length;
+  return (
+    <section className="notifications-panel">
+      <header>
+        <div>
+          <h2>Notifications</h2>
+          <small>{unread} unread</small>
+        </div>
+        <button type="button" onClick={onClear}>
+          Clear all
+        </button>
+      </header>
+      <div>
+        {notifications.length === 0 && <p className="empty-copy">No notifications yet.</p>}
+        {notifications.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            className={`notification-item ${item.isRead ? "" : "unread"}`}
+            onClick={() => onRead(item.id)}
+          >
+            <strong>{item.title}</strong>
+            <small>{item.body || new Date(item.createdAt).toLocaleString()}</small>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function CallsView({ calls, filter, onFilter, currentUser, onCallBack }) {
+  const filters = ["All", "Missed", "Voice", "Video", "Screen Share"];
+  const visibleCalls = calls.filter((call) => {
+    if (filter === "All") return true;
+    if (filter === "Missed") return call.status === "missed";
+    if (filter === "Screen Share") return call.callType === "screen";
+    return call.callType === filter.toLowerCase();
+  });
+
+  return (
+    <section className="page-view">
+      <header className="page-header">
+        <div>
+          <span className="eyebrow">Call history</span>
+          <h1>Calls</h1>
+        </div>
+        <div className="filter-tabs">
+          {filters.map((item) => (
+            <button key={item} type="button" className={filter === item ? "active" : ""} onClick={() => onFilter(item)}>
+              {item}
+            </button>
+          ))}
+        </div>
+      </header>
+      <div className="table-list">
+        {visibleCalls.length === 0 && <p className="empty-copy">No calls match this filter.</p>}
+        {visibleCalls.map((call) => {
+          const peer = String(call.callerId) === String(currentUser.id) ? call.receiver : call.caller;
+          return (
+            <article key={call.id} className={`call-row ${call.status === "missed" ? "missed" : ""}`}>
+              <span className="avatar">{peer?.name?.slice(0, 1).toUpperCase() || "Z"}</span>
+              <div>
+                <strong>{peer?.name || "Zivico user"}</strong>
+                <small>{call.callType} - {call.status} - {call.durationSeconds || 0}s</small>
+              </div>
+              <small>{new Date(call.createdAt).toLocaleString()}</small>
+              <button type="button" onClick={() => peer && onCallBack(peer, call.callType)}>
+                <Phone size={16} />
+              </button>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function SimpleTablePage({ title, eyebrow, children }) {
+  return (
+    <section className="page-view">
+      <header className="page-header">
+        <div>
+          <span className="eyebrow">{eyebrow}</span>
+          <h1>{title}</h1>
+        </div>
+      </header>
+      <div className="table-list">{children}</div>
+    </section>
+  );
+}
+
+function ChatStartView({ role }) {
+  return (
+    <section className="page-view">
+      <header className="page-header">
+        <div>
+          <span className="eyebrow">{role === "support" ? "Client conversations" : "Chats"}</span>
+          <h1>Select a chat</h1>
+        </div>
+      </header>
+      <p className="empty-copy">Choose a conversation from the sidebar.</p>
+    </section>
+  );
+}
+
+function getRelationshipStatus(user) {
+  if (user.relationshipStatus) return user.relationshipStatus;
+  if (user.requestStatus === "accepted") return "accepted";
+  if (user.requestStatus === "pending") return "pending_sent";
+  if (user.requestStatus === "rejected") return "rejected";
+  return "none";
+}
+
 export default function App() {
   const [session, setSession] = useState(loadSavedSession);
   const [contacts, setContacts] = useState([]);
@@ -143,12 +333,27 @@ export default function App() {
   const [contactResults, setContactResults] = useState([]);
   const [contactSearchMessage, setContactSearchMessage] = useState("");
   const [sidebarSearch, setSidebarSearch] = useState("");
+  const [activeView, setActiveView] = useState("chats");
+  const [dashboardMetrics, setDashboardMetrics] = useState(null);
+  const [notifications, setNotifications] = useState([]);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [calls, setCalls] = useState([]);
+  const [callFilter, setCallFilter] = useState("All");
+  const [adminMetrics, setAdminMetrics] = useState(null);
+  const [adminUsers, setAdminUsers] = useState([]);
+  const [adminCalls, setAdminCalls] = useState([]);
+  const [adminMessageStats, setAdminMessageStats] = useState(null);
+  const [adminMediaFiles, setAdminMediaFiles] = useState([]);
+  const [profileForm, setProfileForm] = useState({ name: "", phone: "", about: "" });
+  const [settingsForm, setSettingsForm] = useState({});
+  const [toast, setToast] = useState("");
   const [onlineIds, setOnlineIds] = useState(new Set());
   const [selectedUser, setSelectedUser] = useState(null);
   const [messages, setMessages] = useState([]);
   const [unreadCounts, setUnreadCounts] = useState({});
   const [latestMessages, setLatestMessages] = useState({});
   const [messageText, setMessageText] = useState("");
+  const [typingPeer, setTypingPeer] = useState(null);
   const [replyToMessage, setReplyToMessage] = useState(null);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [call, setCall] = useState(null);
@@ -173,6 +378,23 @@ export default function App() {
   const remoteVideoRef = useRef(null);
 
   const currentUser = session.user;
+
+  useEffect(() => {
+    if (!currentUser) return;
+    setProfileForm({
+      name: currentUser.name || "",
+      phone: currentUser.phone || "",
+      about: currentUser.about || ""
+    });
+    setSettingsForm({
+      notifyMessages: currentUser.notifyMessages !== false,
+      notifyCalls: currentUser.notifyCalls !== false,
+      notifyContacts: currentUser.notifyContacts !== false,
+      showOnline: currentUser.showOnline !== false,
+      showLastSeen: currentUser.showLastSeen !== false,
+      readReceipts: currentUser.readReceipts !== false
+    });
+  }, [currentUser?.id]);
 
   useEffect(() => {
     selectedUserRef.current = selectedUser;
@@ -209,17 +431,26 @@ export default function App() {
     refreshContacts();
     refreshContactRequests();
     refreshConversationSummaries();
+    const role = normalizeRole(session.user?.role);
+    if (role === "support" || role === "admin" || role === "manager") {
+      refreshNotifications();
+      refreshCalls();
+    }
+    if (role === "admin" || role === "manager") {
+      refreshDashboard();
+      refreshAdminData();
+    }
 
     const socket = createSocket(session.token);
     socketRef.current = socket;
 
-    socket.on("connect", () => {
+    function handleConnect() {
       console.log("socket connected", socket.id);
-    });
+    }
 
-    socket.on("presence", (onlineUsers) => {
+    function handlePresence(onlineUsers) {
       setOnlineIds(new Set(onlineUsers.map((user) => user.id)));
-    });
+    }
 
     function handleIncomingMessage(message) {
       console.log("received message", message);
@@ -248,7 +479,7 @@ export default function App() {
       }
 
       if (belongsToOpenChat) {
-        setMessages((current) => mergeMessage(current, normalizedMessage));
+        addMessageIfNotExists(normalizedMessage);
         if (senderId !== currentUserId) {
           markMessagesRead(peerId, [normalizedMessage]);
           setUnreadCounts((current) => ({
@@ -267,10 +498,30 @@ export default function App() {
     socket.on("private-message", handleIncomingMessage);
     socket.on("receive-message", handleIncomingMessage);
 
-    socket.on("message-status-updated", (message) => {
+    function handleMessageStatusUpdated(message) {
       console.log("status updated", message);
-      setMessages((current) => mergeMessage(current, normalizeMessage(message)));
-    });
+      addMessageIfNotExists(message);
+    }
+
+    function handleMessageUpdated(message) {
+      addMessageIfNotExists(message);
+      refreshConversationSummaries();
+    }
+
+    function handleMessageDeleted(message) {
+      addMessageIfNotExists(message);
+      refreshConversationSummaries();
+    }
+
+    function handleNotificationCreated(notification) {
+      setNotifications((current) => [notification, ...current.filter((item) => String(item.id) !== String(notification.id))]);
+      setToast(notification.title);
+      setTimeout(() => setToast(""), 2200);
+    }
+
+    function handleTyping({ from, name, isTyping }) {
+      setTypingPeer(isTyping ? { id: from, name } : null);
+    }
 
     function handleMessagesRead({ messageIds = [] }) {
       console.log("message read", messageIds);
@@ -281,34 +532,39 @@ export default function App() {
       );
     }
 
-    socket.on("message-read", handleMessagesRead);
-    socket.on("messages-read", handleMessagesRead);
-
     function handleMessageReaction({ reaction, action }) {
       setMessages((current) => applyReactionToMessages(current, reaction, action));
     }
 
-    socket.on("message-reaction-added", (payload) => handleMessageReaction({ ...payload, action: "added" }));
-    socket.on("message-reaction-updated", (payload) => handleMessageReaction({ ...payload, action: "updated" }));
-    socket.on("message-reaction-removed", (payload) => handleMessageReaction({ ...payload, action: "removed" }));
+    function handleMessageReactionAdded(payload) {
+      handleMessageReaction({ ...payload, action: "added" });
+    }
 
-    socket.on("contact-request-received", (request) => {
+    function handleMessageReactionUpdated(payload) {
+      handleMessageReaction({ ...payload, action: "updated" });
+    }
+
+    function handleMessageReactionRemoved(payload) {
+      handleMessageReaction({ ...payload, action: "removed" });
+    }
+
+    function handleContactRequestReceived(request) {
       console.log("contact request received", request);
       setContactRequests((current) =>
         current.some((item) => String(item.id) === String(request.id)) ? current : [request, ...current]
       );
-    });
+    }
 
-    socket.on("contact-request-accepted", () => {
+    function handleContactRequestAccepted() {
       refreshContacts();
       refreshContactRequests();
-    });
+    }
 
-    socket.on("contact-request-rejected", () => {
+    function handleContactRequestRejected() {
       refreshContactRequests();
-    });
+    }
 
-    socket.on("call-event-created", (event) => {
+    function handleCallEventCreated(event) {
       console.log("call event received", event);
       const peer = selectedUserRef.current;
       const currentUserId = String(session.user.id);
@@ -319,14 +575,14 @@ export default function App() {
           current.some((item) => String(item.id) === String(event.id)) ? current : [...current, event]
         );
       }
-    });
+    }
 
-    socket.on("call-user", ({ from, fromUser, callType }) => {
+    function handleCallUser({ from, fromUser, callType }) {
       console.log("incoming call type received", callType);
       setIncomingCall({ from, fromUser, callType });
-    });
+    }
 
-    socket.on("call-accepted", async ({ from, callType }) => {
+    async function handleCallAccepted({ from, callType }) {
       const activeCall = callRef.current;
       if (!activeCall || String(activeCall.peer.id) !== String(from) || !pcRef.current) return;
 
@@ -334,9 +590,9 @@ export default function App() {
       const offer = await pcRef.current.createOffer();
       await pcRef.current.setLocalDescription(offer);
       socket.emit("offer", { to: from, offer, callType });
-    });
+    }
 
-    socket.on("offer", async ({ from, offer, callType }) => {
+    async function handleOffer({ from, offer, callType }) {
       let activeCall = callRef.current;
       if (!pcRef.current) {
         const fromUser = contacts.find((user) => String(user.id) === String(from)) || { id: from, name: "Caller", email: "" };
@@ -350,21 +606,21 @@ export default function App() {
       const answer = await pcRef.current.createAnswer();
       await pcRef.current.setLocalDescription(answer);
       socket.emit("answer", { to: from, answer, callType });
-    });
+    }
 
-    socket.on("answer", async ({ answer }) => {
+    async function handleAnswer({ answer }) {
       if (pcRef.current) {
         await pcRef.current.setRemoteDescription(new RTCSessionDescription(answer));
       }
-    });
+    }
 
-    socket.on("ice-candidate", async ({ candidate }) => {
+    async function handleIceCandidate({ candidate }) {
       if (pcRef.current && candidate) {
         await pcRef.current.addIceCandidate(new RTCIceCandidate(candidate));
       }
-    });
+    }
 
-    socket.on("end-call", ({ from, callType, callStatus }) => {
+    function handleEndCall({ from, callType, callStatus }) {
       const pendingIncoming = incomingCallRef.current;
       if (pendingIncoming && String(pendingIncoming.from) === String(from) && !callStatus) {
         saveCallEvent({
@@ -375,9 +631,56 @@ export default function App() {
         });
       }
       endCallLocally();
-    });
+    }
+
+    socket.on("connect", handleConnect);
+    socket.on("presence", handlePresence);
+    socket.on("message-status-updated", handleMessageStatusUpdated);
+    socket.on("message-updated", handleMessageUpdated);
+    socket.on("message-deleted", handleMessageDeleted);
+    socket.on("notification-created", handleNotificationCreated);
+    socket.on("typing", handleTyping);
+    socket.on("message-read", handleMessagesRead);
+    socket.on("messages-read", handleMessagesRead);
+    socket.on("message-reaction-added", handleMessageReactionAdded);
+    socket.on("message-reaction-updated", handleMessageReactionUpdated);
+    socket.on("message-reaction-removed", handleMessageReactionRemoved);
+    socket.on("contact-request-received", handleContactRequestReceived);
+    socket.on("contact-request-accepted", handleContactRequestAccepted);
+    socket.on("contact-request-rejected", handleContactRequestRejected);
+    socket.on("call-event-created", handleCallEventCreated);
+    socket.on("call-user", handleCallUser);
+    socket.on("call-accepted", handleCallAccepted);
+    socket.on("offer", handleOffer);
+    socket.on("answer", handleAnswer);
+    socket.on("ice-candidate", handleIceCandidate);
+    socket.on("end-call", handleEndCall);
 
     return () => {
+      socket.off("connect", handleConnect);
+      socket.off("presence", handlePresence);
+      socket.off("private-message", handleIncomingMessage);
+      socket.off("receive-message", handleIncomingMessage);
+      socket.off("message-status-updated", handleMessageStatusUpdated);
+      socket.off("message-updated", handleMessageUpdated);
+      socket.off("message-deleted", handleMessageDeleted);
+      socket.off("notification-created", handleNotificationCreated);
+      socket.off("typing", handleTyping);
+      socket.off("message-read", handleMessagesRead);
+      socket.off("messages-read", handleMessagesRead);
+      socket.off("message-reaction-added", handleMessageReactionAdded);
+      socket.off("message-reaction-updated", handleMessageReactionUpdated);
+      socket.off("message-reaction-removed", handleMessageReactionRemoved);
+      socket.off("contact-request-received", handleContactRequestReceived);
+      socket.off("contact-request-accepted", handleContactRequestAccepted);
+      socket.off("contact-request-rejected", handleContactRequestRejected);
+      socket.off("call-event-created", handleCallEventCreated);
+      socket.off("call-user", handleCallUser);
+      socket.off("call-accepted", handleCallAccepted);
+      socket.off("offer", handleOffer);
+      socket.off("answer", handleAnswer);
+      socket.off("ice-candidate", handleIceCandidate);
+      socket.off("end-call", handleEndCall);
       socket.disconnect();
       endCallLocally();
     };
@@ -413,10 +716,14 @@ export default function App() {
             String(contact.phone || "").toLowerCase().includes(query)
         )
         .sort(
-          (a, b) => Number(onlineIds.has(b.id)) - Number(onlineIds.has(a.id)) || a.name.localeCompare(b.name)
+          (a, b) =>
+            Number(b.isOfficialSupport || b.role === "support") - Number(a.isOfficialSupport || a.role === "support") ||
+            Number(unreadCounts[String(b.id)] || 0) - Number(unreadCounts[String(a.id)] || 0) ||
+            Number(onlineIds.has(b.id)) - Number(onlineIds.has(a.id)) ||
+            a.name.localeCompare(b.name)
         );
     },
-    [contacts, onlineIds, sidebarSearch]
+    [contacts, onlineIds, sidebarSearch, unreadCounts]
   );
 
   function handleAuth(nextSession) {
@@ -444,12 +751,57 @@ export default function App() {
       .catch(console.error);
   }
 
+  function refreshDashboard() {
+    if (!session.token) return;
+    api("/api/dashboard", {}, session.token).then(setDashboardMetrics).catch(console.error);
+  }
+
+  function refreshNotifications() {
+    if (!session.token) return;
+    api("/api/notifications", {}, session.token).then(setNotifications).catch(console.error);
+  }
+
+  function refreshCalls() {
+    if (!session.token) return;
+    api("/api/call-events", {}, session.token).then(setCalls).catch(console.error);
+  }
+
+  function refreshAdminData() {
+    if (!session.token) return;
+    Promise.all([
+      api("/api/admin/metrics", {}, session.token),
+      api("/api/admin/users", {}, session.token),
+      api("/api/admin/call-logs", {}, session.token),
+      api("/api/admin/message-stats", {}, session.token),
+      api("/api/admin/media-files", {}, session.token)
+    ])
+      .then(([metrics, users, callLogs, messageStats, mediaFiles]) => {
+        setAdminMetrics(metrics);
+        setAdminUsers(users);
+        setAdminCalls(callLogs);
+        setAdminMessageStats(messageStats);
+        setAdminMediaFiles(mediaFiles);
+      })
+      .catch(console.error);
+  }
+
+  function addMessageIfNotExists(message) {
+    setMessages((current) => mergeMessageById(current, message));
+  }
+
   function selectUser(user) {
     setSelectedUser(user);
     setUnreadCounts((current) => ({
       ...current,
       [String(user.id)]: 0
     }));
+  }
+
+  function openContactChat(user) {
+    const contact = contacts.find((item) => String(item.id) === String(user.id)) || user;
+    selectUser(contact);
+    setActiveView("chats");
+    setShowAddContact(false);
   }
 
   function logout() {
@@ -462,6 +814,10 @@ export default function App() {
     setUnreadCounts({});
     setLatestMessages({});
     setReplyToMessage(null);
+    setDashboardMetrics(null);
+    setNotifications([]);
+    setCalls([]);
+    setActiveView("chats");
   }
 
   function markMessagesRead(peerId, chatMessages = messages) {
@@ -518,7 +874,11 @@ export default function App() {
       );
       setContactSearchMessage("Request pending");
       setContactResults((current) =>
-        current.map((user) => (String(user.id) === String(receiverId) ? { ...user, requestStatus: "pending" } : user))
+        current.map((user) =>
+          String(user.id) === String(receiverId)
+            ? { ...user, relationshipStatus: "pending_sent", requestStatus: "pending", contactRequestId: request.id }
+            : user
+        )
       );
       console.log("contact-request-sent", request);
     } catch (err) {
@@ -529,6 +889,18 @@ export default function App() {
   async function respondToContactRequest(requestId, action) {
     const result = await api(`/api/contact-requests/${requestId}/${action}`, { method: "POST" }, session.token);
     setContactRequests((current) => current.filter((request) => String(request.id) !== String(requestId)));
+    setContactResults((current) =>
+      current.map((user) =>
+        String(user.contactRequestId) === String(requestId)
+          ? {
+              ...user,
+              relationshipStatus: action === "accept" ? "accepted" : "rejected",
+              requestStatus: action === "accept" ? "accepted" : "rejected",
+              contactRequestId: null
+            }
+          : user
+      )
+    );
     refreshContacts();
     console.log(`contact-request-${action}`, result);
   }
@@ -562,7 +934,7 @@ export default function App() {
     };
 
     console.log("message sent", optimisticMessage);
-    setMessages((current) => mergeMessage(current, optimisticMessage));
+    addMessageIfNotExists(optimisticMessage);
     setLatestMessages((current) => ({
       ...current,
       [String(selectedUser.id)]: text
@@ -574,7 +946,15 @@ export default function App() {
       replyToMessageId: replyToMessage?.id || null
     });
     setMessageText("");
+    socketRef.current.emit("typing", { to: selectedUser.id, isTyping: false });
     setReplyToMessage(null);
+  }
+
+  function updateMessageDraft(value) {
+    setMessageText(value);
+    if (selectedUser && socketRef.current) {
+      socketRef.current.emit("typing", { to: selectedUser.id, isTyping: Boolean(value.trim()) });
+    }
   }
 
   async function uploadMedia(file, purpose) {
@@ -624,7 +1004,7 @@ export default function App() {
         status: "sent"
       };
 
-      setMessages((current) => mergeMessage(current, optimisticMessage));
+      addMessageIfNotExists(optimisticMessage);
       setLatestMessages((current) => ({
         ...current,
         [String(selectedUser.id)]: getPreviewText(optimisticMessage)
@@ -665,7 +1045,7 @@ export default function App() {
         [peerId]: getPreviewText(forwardedMessage)
       }));
       if (selectedUser && String(selectedUser.id) === peerId) {
-        setMessages((current) => mergeMessage(current, forwardedMessage));
+        addMessageIfNotExists(forwardedMessage);
       }
     });
   }
@@ -698,6 +1078,24 @@ export default function App() {
     } catch (err) {
       console.error(err);
       setMessages((current) => applyReactionToMessages(current, optimisticReaction, currentReaction ? "updated" : "removed"));
+    }
+  }
+
+  async function editMessage(message, text) {
+    const updated = await api(
+      `/api/messages/${message.id}`,
+      { method: "PATCH", body: JSON.stringify({ text }) },
+      session.token
+    );
+    addMessageIfNotExists(updated);
+  }
+
+  async function deleteMessage(message, scope) {
+    const result = await api(`/api/messages/${message.id}?scope=${scope}`, { method: "DELETE" }, session.token);
+    if (result.scope === "me") {
+      setMessages((current) => current.filter((item) => String(item.id) !== String(message.id)));
+    } else {
+      addMessageIfNotExists(result.message);
     }
   }
 
@@ -935,12 +1333,85 @@ export default function App() {
     endCallLocally();
   }
 
+  async function markNotificationRead(notificationId) {
+    const next = await api(`/api/notifications/${notificationId}/read`, { method: "POST" }, session.token);
+    setNotifications(next);
+  }
+
+  async function clearAllNotifications() {
+    const next = await api("/api/notifications/clear", { method: "POST" }, session.token);
+    setNotifications(next);
+  }
+
+  async function saveProfile(event) {
+    event.preventDefault();
+    const user = await api("/api/profile", { method: "PATCH", body: JSON.stringify(profileForm) }, session.token);
+    setSession((current) => ({ ...current, user }));
+    setToast("Profile updated");
+    setTimeout(() => setToast(""), 2200);
+  }
+
+  async function saveSettings(event) {
+    event.preventDefault();
+    const user = await api("/api/profile/settings", { method: "PATCH", body: JSON.stringify(settingsForm) }, session.token);
+    setSession((current) => ({ ...current, user }));
+    setToast("Settings updated");
+    setTimeout(() => setToast(""), 2200);
+  }
+
+  async function toggleBlockedUser(user) {
+    const action = user.isBlocked ? "unblock" : "block";
+    await api(`/api/admin/users/${user.id}/${action}`, { method: "POST" }, session.token);
+    refreshAdminData();
+  }
+
+  function callBackUser(user, type = "voice") {
+    setSelectedUser(user);
+    setActiveView("chats");
+    setToast(`Open ${user.name} to start a ${type} call`);
+    setTimeout(() => setToast(""), 2200);
+  }
+
+  const unreadNotificationCount = notifications.filter((item) => !item.isRead).length;
+  const unreadTotal = Object.values(unreadCounts).reduce((total, count) => total + Number(count || 0), 0);
+  const missedCalls = calls.filter((item) => item.status === "missed" && String(item.receiverId) === String(currentUser?.id)).length;
+  const todayKey = new Date().toDateString();
+  const todayCalls = calls.filter((item) => new Date(item.createdAt).toDateString() === todayKey).length;
+  const currentRole = normalizeRole(currentUser?.role);
+  const isClient = currentRole === "client";
+  const isSupport = currentRole === "support";
+  const isAdmin = currentRole === "admin" || currentUser?.isAdmin;
+  const isManager = currentRole === "manager";
+  const canViewDashboard = isAdmin || isManager;
+  const canViewCalls = isSupport || isAdmin || isManager;
+  const canViewAdminTools = isAdmin || isManager;
+  const canViewNotifications = !isClient;
+  const showWorkspaceStats = !isClient;
+
+  useEffect(() => {
+    if (!currentUser) return;
+
+    const allowedViews = new Set(["chats", "profile", "settings"]);
+    if (canViewCalls) allowedViews.add("calls");
+    if (canViewDashboard) allowedViews.add("dashboard");
+    if (canViewAdminTools) allowedViews.add("admin");
+
+    if (!allowedViews.has(activeView)) {
+      setActiveView("chats");
+    }
+
+    if (isClient && ["/dashboard", "/admin", "/calls", "/reports", "/users"].includes(window.location.pathname)) {
+      window.history.replaceState(null, "", "/chats");
+      setActiveView("chats");
+    }
+  }, [activeView, canViewAdminTools, canViewCalls, canViewDashboard, currentUser, isClient]);
+
   if (!currentUser) {
     return <AuthPanel onAuth={handleAuth} />;
   }
 
   return (
-    <main className="app-shell">
+    <main className="app-shell premium-shell">
       <header className="topbar">
         <input
           ref={avatarInputRef}
@@ -953,11 +1424,23 @@ export default function App() {
             event.target.value = "";
           }}
         />
-        <div>
-          <strong>Zivico Talk</strong>
-          <span>{currentUser.name}</span>
+        <div className="brand-top">
+          <span className="brand-mark small">ZT</span>
+          <span>
+            <strong>Zivico Talk</strong>
+            <small>{currentUser.name}</small>
+          </span>
         </div>
         <span className="topbar-actions">
+          {canViewNotifications && (
+            <button className="icon-button" type="button" title="Notifications" onClick={() => setShowNotifications((value) => !value)}>
+              {unreadNotificationCount > 0 ? <BellRing size={20} /> : <Bell size={20} />}
+              {unreadNotificationCount > 0 && <span className="topbar-badge">{unreadNotificationCount}</span>}
+            </button>
+          )}
+          <button className="icon-button" type="button" title="Settings" onClick={() => setActiveView("settings")}>
+            <Settings size={20} />
+          </button>
           <button
             className="profile-image-button"
             type="button"
@@ -969,12 +1452,38 @@ export default function App() {
             <Camera size={14} />
           </button>
           <button type="button" onClick={logout}>
-            Logout
+            <LogOut size={16} />
           </button>
         </span>
+        {canViewNotifications && showNotifications && (
+          <NotificationsPanel notifications={notifications} onRead={markNotificationRead} onClear={clearAllNotifications} />
+        )}
       </header>
 
       <div className="workspace">
+        <nav className="rail-nav" aria-label="Main navigation">
+          <button className={activeView === "chats" ? "active" : ""} type="button" title="Chats" onClick={() => setActiveView("chats")}>
+            <MessageSquare size={20} />
+          </button>
+          {canViewDashboard && (
+            <button className={activeView === "dashboard" ? "active" : ""} type="button" title="Dashboard" onClick={() => setActiveView("dashboard")}>
+              <LayoutDashboard size={20} />
+            </button>
+          )}
+          {canViewCalls && (
+            <button className={activeView === "calls" ? "active" : ""} type="button" title="Calls" onClick={() => setActiveView("calls")}>
+              <Phone size={20} />
+            </button>
+          )}
+          <button className={activeView === "profile" ? "active" : ""} type="button" title="Profile" onClick={() => setActiveView("profile")}>
+            <UserCircle size={20} />
+          </button>
+          {canViewAdminTools && (
+            <button className={activeView === "admin" ? "active" : ""} type="button" title="Admin" onClick={() => setActiveView("admin")}>
+              <Shield size={20} />
+            </button>
+          )}
+        </nav>
         <UserList
           apiUrl={API_URL}
           users={sortedUsers}
@@ -989,24 +1498,125 @@ export default function App() {
           onShowRequests={() => setShowRequests(true)}
           onSelect={selectUser}
         />
-        <ChatWindow
-          currentUser={currentUser}
-          selectedUser={selectedUser}
-          messages={messages}
-          messageText={messageText}
-          contacts={contacts}
-          replyToMessage={replyToMessage}
-          onMessageText={setMessageText}
-          onSend={sendMessage}
-          onSendMedia={sendMediaMessage}
-          onReactToMessage={reactToMessage}
-          onReplyToMessage={setReplyToMessage}
-          onCancelReply={() => setReplyToMessage(null)}
-          onForwardMessage={forwardMessage}
-          onStartCall={startCall}
-          apiUrl={API_URL}
-        />
+        {activeView === "chats" && selectedUser && (
+          <ChatWindow
+            currentUser={currentUser}
+            selectedUser={selectedUser}
+            messages={messages}
+            messageText={messageText}
+            contacts={contacts}
+            replyToMessage={replyToMessage}
+            isTyping={typingPeer && String(typingPeer.id) === String(selectedUser.id) ? typingPeer : null}
+            onMessageText={updateMessageDraft}
+            onSend={sendMessage}
+            onSendMedia={sendMediaMessage}
+            onReactToMessage={reactToMessage}
+            onEditMessage={editMessage}
+            onDeleteMessage={deleteMessage}
+            onReplyToMessage={setReplyToMessage}
+            onCancelReply={() => setReplyToMessage(null)}
+            onForwardMessage={forwardMessage}
+            onStartCall={startCall}
+            apiUrl={API_URL}
+          />
+        )}
+        {activeView === "chats" && !selectedUser && (
+          showWorkspaceStats ? (
+            <DashboardView
+              metrics={dashboardMetrics}
+              contacts={contacts}
+              unreadTotal={unreadTotal}
+              missedCalls={missedCalls}
+              todayCalls={todayCalls}
+            />
+          ) : (
+            <ChatStartView role={currentRole} />
+          )
+        )}
+        {activeView === "dashboard" && canViewDashboard && (
+          <DashboardView
+            metrics={dashboardMetrics}
+            contacts={contacts}
+            unreadTotal={unreadTotal}
+            missedCalls={missedCalls}
+            todayCalls={todayCalls}
+          />
+        )}
+        {activeView === "calls" && canViewCalls && (
+          <CallsView calls={calls} filter={callFilter} onFilter={setCallFilter} currentUser={currentUser} onCallBack={callBackUser} />
+        )}
+        {activeView === "profile" && (
+          <SimpleTablePage title="Profile" eyebrow="Account">
+            <form className="settings-form" onSubmit={saveProfile}>
+              <label>Name<input value={profileForm.name} onChange={(event) => setProfileForm((current) => ({ ...current, name: event.target.value }))} /></label>
+              <label>Phone<input value={profileForm.phone} onChange={(event) => setProfileForm((current) => ({ ...current, phone: event.target.value }))} /></label>
+              <label>Status/About<input value={profileForm.about} onChange={(event) => setProfileForm((current) => ({ ...current, about: event.target.value }))} /></label>
+              <label>Email<input value={currentUser.email} readOnly /></label>
+              <button type="submit">Save Profile</button>
+            </form>
+          </SimpleTablePage>
+        )}
+        {activeView === "settings" && (
+          <SimpleTablePage title="Settings" eyebrow="Preferences">
+            <form className="settings-form" onSubmit={saveSettings}>
+              {["notifyMessages", "notifyCalls", "notifyContacts", "showOnline", "showLastSeen", "readReceipts"].map((key) => (
+                <label className="toggle-row" key={key}>
+                  <span>{key.replace(/([A-Z])/g, " $1")}</span>
+                  <input type="checkbox" checked={settingsForm[key] !== false} onChange={(event) => setSettingsForm((current) => ({ ...current, [key]: event.target.checked }))} />
+                </label>
+              ))}
+              <button type="submit">Save Settings</button>
+            </form>
+          </SimpleTablePage>
+        )}
+        {activeView === "admin" && canViewAdminTools && (
+          <SimpleTablePage title="Admin Dashboard" eyebrow="Operations">
+            <div className="stats-grid compact">
+              {[
+                ["Total Users", adminMetrics?.totalUsers || 0, Users],
+                ["Online Users", adminMetrics?.onlineUsers || 0, CheckCircle2],
+                ["Messages", adminMetrics?.totalMessages || 0, MessageSquare],
+                ["Calls", adminMetrics?.totalCalls || 0, Phone],
+                ["Missed Calls", adminMetrics?.missedCalls || 0, Bell],
+                ["Media Files", adminMetrics?.mediaFiles || 0, FileText],
+                ["Pending Requests", adminMetrics?.pendingContactRequests || 0, Users]
+              ].map(([label, value, icon]) => <StatCard key={label} label={label} value={value} icon={icon} />)}
+            </div>
+            <h2>Users</h2>
+            {adminUsers.map((user) => (
+              <article className="admin-row" key={user.id}>
+                <div><strong>{user.name}</strong><small>{user.email}</small></div>
+                <small>{user.role}</small>
+                <button type="button" onClick={() => toggleBlockedUser(user)}>{user.isBlocked ? "Unblock" : "Block"}</button>
+              </article>
+            ))}
+            <h2>Call Logs</h2>
+            {adminCalls.slice(0, 8).map((callLog) => (
+              <article className="admin-row" key={callLog.id}>
+                <div><strong>{callLog.caller?.name} to {callLog.receiver?.name}</strong><small>{callLog.callType} - {callLog.status}</small></div>
+                <small>{new Date(callLog.createdAt).toLocaleString()}</small>
+              </article>
+            ))}
+            <h2>Message Stats</h2>
+            <pre className="stats-json">{JSON.stringify(adminMessageStats || {}, null, 2)}</pre>
+            <h2>Media Files</h2>
+            {adminMediaFiles.slice(0, 8).map((file) => (
+              <article className="admin-row" key={file.id}>
+                <div><strong>{file.fileName}</strong><small>{file.uploader?.email}</small></div>
+                <small>{file.mimeType}</small>
+              </article>
+            ))}
+          </SimpleTablePage>
+        )}
+        {showWorkspaceStats && (
+          <aside className="info-panel">
+            <span className="eyebrow">Workspace</span>
+            <strong>{selectedUser?.name || "No chat selected"}</strong>
+            <small>{contacts.length} contacts - {unreadTotal} unread - {missedCalls} missed calls</small>
+          </aside>
+        )}
       </div>
+      {toast && <div className="toast">{toast}</div>}
 
       <VideoCallModal
         call={call}
@@ -1038,28 +1648,55 @@ export default function App() {
               <input
                 value={contactQuery}
                 onChange={(event) => setContactQuery(event.target.value)}
-                placeholder="Search by email or phone"
+                placeholder="Search by name, email, or phone"
               />
               <button type="submit">Search</button>
             </form>
             {contactSearchMessage && <p className="empty-copy">{contactSearchMessage}</p>}
             <div className="contact-results">
-              {contactResults.map((user) => (
-                <article className="contact-result" key={user.id}>
-                  <span className="avatar">{user.name.slice(0, 1).toUpperCase()}</span>
-                  <div>
-                    <strong>{user.name}</strong>
-                    <small>{user.email || user.phone}</small>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={user.requestStatus === "pending"}
-                    onClick={() => sendContactRequest(user.id)}
-                  >
-                    {user.requestStatus === "pending" ? "Request pending" : "Send Request"}
-                  </button>
-                </article>
-              ))}
+              {contactResults.map((user) => {
+                const relationshipStatus = getRelationshipStatus(user);
+                const isAccepted = relationshipStatus === "accepted";
+                const isPendingSent = relationshipStatus === "pending_sent";
+                const isPendingReceived = relationshipStatus === "pending_received";
+
+                return (
+                  <article className="contact-result" key={user.id}>
+                    <span className="avatar">{user.name.slice(0, 1).toUpperCase()}</span>
+                    <div>
+                      <strong>{user.name}</strong>
+                      <small>{user.email || user.phone}</small>
+                    </div>
+                    {isAccepted && (
+                      <span className="request-actions">
+                        <span className="contact-status-badge added">Added</span>
+                        <button type="button" onClick={() => openContactChat(user)}>
+                          Open Chat
+                        </button>
+                      </span>
+                    )}
+                    {isPendingSent && <span className="contact-status-badge">Request pending</span>}
+                    {isPendingReceived && user.contactRequestId && (
+                      <span className="request-actions">
+                        <button type="button" onClick={() => respondToContactRequest(user.contactRequestId, "accept")}>
+                          Accept
+                        </button>
+                        <button type="button" onClick={() => respondToContactRequest(user.contactRequestId, "reject")}>
+                          Reject
+                        </button>
+                      </span>
+                    )}
+                    {isPendingReceived && !user.contactRequestId && (
+                      <span className="contact-status-badge">Respond to request</span>
+                    )}
+                    {!isAccepted && !isPendingSent && !isPendingReceived && (
+                      <button type="button" onClick={() => sendContactRequest(user.id)}>
+                        Send Request
+                      </button>
+                    )}
+                  </article>
+                );
+              })}
             </div>
           </section>
         </div>

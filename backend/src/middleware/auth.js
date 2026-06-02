@@ -19,6 +19,14 @@ export function authRequired(req, res, next) {
   }
 }
 
+export function adminRequired(req, res, next) {
+  const role = req.user?.role || "client";
+  if (role !== "admin" && role !== "manager") {
+    return res.status(403).json({ message: "Admin access required" });
+  }
+  return next();
+}
+
 export function verifySocketToken(socket, next) {
   const token = socket.handshake.auth?.token;
 

@@ -13,7 +13,15 @@ router.get("/search", authRequired, async (req, res) => {
   const results = await Promise.all(
     users.map(async (user) => {
       const contactStatus = await getContactStatus(req.user.id, user.id);
-      return { ...user, requestStatus: contactStatus.status };
+      const relationshipStatus =
+        contactStatus.relationshipStatus ||
+        (contactStatus.status === "accepted" ? "accepted" : contactStatus.status === "rejected" ? "rejected" : "none");
+      return {
+        ...user,
+        relationshipStatus,
+        requestStatus: contactStatus.status,
+        contactRequestId: contactStatus.request?.id || null
+      };
     })
   );
   return res.json(results);

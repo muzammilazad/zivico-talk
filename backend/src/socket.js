@@ -1,8 +1,12 @@
 import { v4 as uuid } from "uuid";
 import { verifySocketToken } from "./middleware/auth.js";
-import { markConversationRead, saveMessage, updateMessageStatus } from "./services/store.js";
+import { createNotification, markConversationRead, saveMessage, updateMessageStatus } from "./services/store.js";
 
 const onlineUsers = new Map();
+
+export function getOnlineUserCount() {
+  return onlineUsers.size;
+}
 
 function publicOnlineUsers() {
   return Array.from(onlineUsers, ([userId, entry]) => ({
@@ -49,9 +53,9 @@ export function setupSocket(io) {
         return;
       }
 
+      const messageId = clientId ? String(clientId) : uuid();
       const payload = await saveMessage({
-        id: uuid(),
-        clientId,
+        id: messageId,
         senderId: user.id,
         receiverId,
         type: messageType,
@@ -75,6 +79,14 @@ export function setupSocket(io) {
         io.to(receiverRoom).emit("receive-message", payload);
         console.log("message delivered", payload.id);
       }
+
+      const notification = await createNotification({
+        userId: receiverId,
+        type: "new_message",
+        title: `New message from ${user.name}`,
+        body: messageText || mediaName || messageType
+      });
+      io.to(receiverRoom).emit("notification-created", notification);
 
       socket.emit("private-message", payload);
       socket.emit("message-status-updated", payload);
@@ -117,6 +129,11 @@ export function setupSocket(io) {
         from: peerId,
         messageIds: readMessageIds
       });
+    });
+
+    socket.on("typing", ({ to, isTyping }) => {
+      if (!to) return;
+      io.to(String(to)).emit("typing", { from: user.id, name: user.name, isTyping: Boolean(isTyping) });
     });
 
     socket.on("call-accepted", ({ to, callType }) => {

@@ -1,4 +1,5 @@
 import { prisma } from "./prisma.js";
+import { ensureDefaultSupportAccount, ensureSupportContactForUser } from "./defaultAccounts.js";
 
 const messageInclude = {
   reactions: true,
@@ -12,6 +13,10 @@ const messageInclude = {
 function publicUser(user) {
   if (!user) return null;
   const { passwordHash, ...safeUser } = user;
+  safeUser.role = safeUser.role === "user" ? "client" : safeUser.role || "client";
+  safeUser.isAdmin = safeUser.role === "admin";
+  safeUser.isSupport = safeUser.role === "support";
+  safeUser.isOfficialSupport = safeUser.role === "support" && Boolean(safeUser.isSystem);
   return safeUser;
 }
 
@@ -45,9 +50,10 @@ function normalizeMessage(message) {
 
   return {
     ...message,
+    text: message.isDeletedForEveryone ? "" : message.text,
     reactions: message.reactions || [],
     replyToMessage,
-    message: message.text || "",
+    message: message.isDeletedForEveryone ? "" : message.text || "",
     timestamp: message.createdAt,
     createdAt: message.createdAt
   };
@@ -63,6 +69,14 @@ function normalizeCallEvent(event) {
 
 export async function findUserByEmail(email) {
   return prisma.user.findUnique({ where: { email: String(email || "").toLowerCase() } });
+}
+
+export function isAdminEmail(email) {
+  const adminEmails = String(process.env.ADMIN_EMAIL || "")
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  return adminEmails.includes(String(email || "").toLowerCase());
 }
 
 export async function findUserByPhone(phone) {
@@ -83,10 +97,18 @@ export async function createUser(user) {
       email: user.email,
       phone: user.phone || null,
       passwordHash: user.passwordHash,
+      role: user.role || "client",
+      isSystem: Boolean(user.isSystem),
       avatarUrl: user.avatarUrl || null,
       createdAt: user.createdAt ? new Date(user.createdAt) : undefined
     }
   });
+}
+
+export async function ensureAdminRole(user) {
+  if (!user) return null;
+  if (user.role === "admin" || !isAdminEmail(user.email)) return publicUser(user);
+  return publicUser(await prisma.user.update({ where: { id: user.id }, data: { role: "admin" } }));
 }
 
 export async function updateUserAvatar(userId, avatarUrl) {
@@ -103,14 +125,52 @@ export async function listUsers() {
   return users.map(publicUser);
 }
 
+export async function updateUserProfile(userId, data) {
+  return publicUser(
+    await prisma.user.update({
+      where: { id: String(userId) },
+      data: {
+        ...(data.name !== undefined ? { name: data.name } : {}),
+        ...(data.phone !== undefined ? { phone: data.phone || null } : {}),
+        ...(data.about !== undefined ? { about: data.about || null } : {})
+      }
+    })
+  );
+}
+
+export async function updateUserSettings(userId, data) {
+  return publicUser(
+    await prisma.user.update({
+      where: { id: String(userId) },
+      data: {
+        ...(data.showOnline !== undefined ? { showOnline: Boolean(data.showOnline) } : {}),
+        ...(data.showLastSeen !== undefined ? { showLastSeen: Boolean(data.showLastSeen) } : {}),
+        ...(data.readReceipts !== undefined ? { readReceipts: Boolean(data.readReceipts) } : {}),
+        ...(data.notifyMessages !== undefined ? { notifyMessages: Boolean(data.notifyMessages) } : {}),
+        ...(data.notifyCalls !== undefined ? { notifyCalls: Boolean(data.notifyCalls) } : {}),
+        ...(data.notifyContacts !== undefined ? { notifyContacts: Boolean(data.notifyContacts) } : {})
+      }
+    })
+  );
+}
+
 export async function searchUsers({ query, currentUserId }) {
   const q = String(query || "").trim();
   if (!q) return [];
 
+  const currentUser = await prisma.user.findUnique({ where: { id: String(currentUserId) } });
+  const role = currentUser?.role === "user" ? "client" : currentUser?.role || "client";
+  const visibleRoleFilter =
+    role === "admin"
+      ? {}
+      : role === "support"
+        ? { OR: [{ role: "client" }, { role: "user" }] }
+        : { OR: [{ role: "client" }, { role: "user" }] };
+
   const users = await prisma.user.findMany({
     where: {
       id: { not: String(currentUserId) },
-      OR: [{ email: { contains: q } }, { phone: { contains: q } }]
+      AND: [visibleRoleFilter, { OR: [{ name: { contains: q } }, { email: { contains: q } }, { phone: { contains: q } }] }]
     },
     orderBy: { name: "asc" },
     take: 8
@@ -120,16 +180,32 @@ export async function searchUsers({ query, currentUserId }) {
 }
 
 export async function listAcceptedContacts(userId) {
+  const currentUser = await prisma.user.findUnique({ where: { id: String(userId) } });
+  if (currentUser?.role === "client" || currentUser?.role === "user") {
+    await ensureSupportContactForUser(currentUser);
+  }
+
   const contacts = await prisma.contact.findMany({
     where: { userId: String(userId), status: "accepted" },
     include: { contactUser: true },
     orderBy: { createdAt: "desc" }
   });
 
-  return contacts.map((contact) => publicUser(contact.contactUser));
+  const users = contacts.map((contact) => publicUser(contact.contactUser));
+
+  if (currentUser?.role === "client" || currentUser?.role === "user") {
+    const support = publicUser(await ensureDefaultSupportAccount());
+    if (support && !users.some((user) => String(user.id) === String(support.id))) {
+      users.unshift(support);
+    }
+  }
+
+  return users;
 }
 
 export async function getContactStatus(userAId, userBId) {
+  if (String(userAId) === String(userBId)) return { status: "self" };
+
   const contact = await prisma.contact.findFirst({
     where: {
       userId: String(userAId),
@@ -146,13 +222,52 @@ export async function getContactStatus(userAId, userBId) {
         { senderId: String(userAId), receiverId: String(userBId) },
         { senderId: String(userBId), receiverId: String(userAId) }
       ]
-    }
+    },
+    include: { sender: true, receiver: true },
+    orderBy: { createdAt: "desc" }
   });
 
-  return request ? { status: "pending", request: normalizeContactRequest(request) } : { status: "none" };
+  if (request) {
+    const direction = String(request.senderId) === String(userAId) ? "sent" : "received";
+    return { status: "pending", relationshipStatus: `pending_${direction}`, direction, request: normalizeContactRequest(request) };
+  }
+
+  const rejectedRequest = await prisma.contactRequest.findFirst({
+    where: {
+      status: "rejected",
+      OR: [
+        { senderId: String(userAId), receiverId: String(userBId) },
+        { senderId: String(userBId), receiverId: String(userAId) }
+      ]
+    },
+    include: { sender: true, receiver: true },
+    orderBy: { respondedAt: "desc" }
+  });
+
+  return rejectedRequest
+    ? { status: "rejected", relationshipStatus: "rejected", request: normalizeContactRequest(rejectedRequest) }
+    : { status: "none", relationshipStatus: "none" };
 }
 
 export async function createContactRequest(request) {
+  if (String(request.requesterId) === String(request.receiverId)) {
+    const error = new Error("You cannot add yourself");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const contactStatus = await getContactStatus(request.requesterId, request.receiverId);
+  if (contactStatus.status === "accepted") {
+    const error = new Error("Already contacts");
+    error.statusCode = 409;
+    throw error;
+  }
+  if (contactStatus.status === "pending") {
+    const error = new Error("Request pending");
+    error.statusCode = 409;
+    throw error;
+  }
+
   const existing = await prisma.contactRequest.findFirst({
     where: {
       senderId: String(request.requesterId),
@@ -269,6 +384,60 @@ export async function updateMessageStatus(messageId, status) {
   return normalizeMessage(updated);
 }
 
+export async function editMessage({ messageId, userId, text }) {
+  const message = await prisma.message.findFirst({
+    where: {
+      id: String(messageId),
+      senderId: String(userId),
+      type: "text",
+      isDeletedForEveryone: false
+    }
+  });
+  if (!message) return null;
+
+  const updated = await prisma.message.update({
+    where: { id: String(messageId) },
+    data: { text: String(text || "").trim(), editedAt: new Date() },
+    include: messageInclude
+  });
+  return normalizeMessage(updated);
+}
+
+export async function deleteMessage({ messageId, userId, scope }) {
+  const message = await findMessageForUser(messageId, userId);
+  if (!message) return null;
+
+  if (scope === "everyone" && String(message.senderId) === String(userId)) {
+    const updated = await prisma.message.update({
+      where: { id: String(messageId) },
+      data: {
+        isDeletedForEveryone: true,
+        text: null,
+        mediaUrl: null,
+        mediaName: null,
+        mediaMimeType: null,
+        mediaDurationSeconds: null
+      },
+      include: messageInclude
+    });
+    return { scope, message: normalizeMessage(updated) };
+  }
+
+  const deletedForUserIds = new Set(
+    String(message.deletedForUserIds || "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean)
+  );
+  deletedForUserIds.add(String(userId));
+  const updated = await prisma.message.update({
+    where: { id: String(messageId) },
+    data: { deletedForUserIds: Array.from(deletedForUserIds).join(",") },
+    include: messageInclude
+  });
+  return { scope: "me", message: normalizeMessage(updated) };
+}
+
 export async function markConversationRead({ readerId, peerId, messageIds = [] }) {
   const ids = messageIds.map(String);
   const where = {
@@ -301,7 +470,9 @@ export async function getConversation(userId, peerId) {
     include: messageInclude
   });
 
-  return messages.map(normalizeMessage);
+  return messages
+    .filter((message) => !String(message.deletedForUserIds || "").split(",").includes(String(userId)))
+    .map(normalizeMessage);
 }
 
 export async function saveCallEvent(event) {
@@ -355,7 +526,12 @@ export async function getConversationTimeline(userId, peerId) {
     })
   ]);
 
-  return [...messages.map(normalizeMessage), ...callEvents.map(normalizeCallEvent)].sort(
+  return [
+    ...messages
+      .filter((message) => !String(message.deletedForUserIds || "").split(",").includes(String(userId)))
+      .map(normalizeMessage),
+    ...callEvents.map(normalizeCallEvent)
+  ].sort(
     (a, b) => new Date(a.createdAt) - new Date(b.createdAt)
   );
 }
@@ -487,4 +663,129 @@ export async function getConversationSummaries(userId) {
   );
 
   return summaries;
+}
+
+export async function listCallEventsForUser(userId) {
+  const events = await prisma.callEvent.findMany({
+    where: { OR: [{ callerId: String(userId) }, { receiverId: String(userId) }] },
+    include: {
+      caller: { select: { id: true, name: true, email: true, avatarUrl: true } },
+      receiver: { select: { id: true, name: true, email: true, avatarUrl: true } }
+    },
+    orderBy: { createdAt: "desc" },
+    take: 100
+  });
+  return events.map(normalizeCallEvent);
+}
+
+export async function createNotification({ userId, type, title, body }) {
+  return prisma.notification.create({
+    data: { userId: String(userId), type, title, body: body || null }
+  });
+}
+
+export async function listNotifications(userId) {
+  return prisma.notification.findMany({
+    where: { userId: String(userId) },
+    orderBy: { createdAt: "desc" },
+    take: 50
+  });
+}
+
+export async function markNotificationRead(userId, notificationId) {
+  await prisma.notification.updateMany({
+    where: { id: String(notificationId), userId: String(userId) },
+    data: { isRead: true }
+  });
+  return listNotifications(userId);
+}
+
+export async function clearNotifications(userId) {
+  await prisma.notification.updateMany({
+    where: { userId: String(userId), isRead: false },
+    data: { isRead: true }
+  });
+  return listNotifications(userId);
+}
+
+export async function getDashboardMetrics(userId) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const [totalContacts, unreadMessages, missedCalls, todaysCalls, pendingRequests, calls, messages] = await Promise.all([
+    prisma.contact.count({ where: { userId: String(userId), status: "accepted" } }),
+    prisma.message.count({ where: { receiverId: String(userId), status: { not: "read" } } }),
+    prisma.callEvent.count({ where: { receiverId: String(userId), status: "missed" } }),
+    prisma.callEvent.count({
+      where: { createdAt: { gte: today }, OR: [{ callerId: String(userId) }, { receiverId: String(userId) }] }
+    }),
+    prisma.contactRequest.count({ where: { receiverId: String(userId), status: "pending" } }),
+    prisma.callEvent.findMany({
+      where: { OR: [{ callerId: String(userId) }, { receiverId: String(userId) }] },
+      orderBy: { createdAt: "desc" },
+      take: 8
+    }),
+    prisma.message.findMany({
+      where: { OR: [{ senderId: String(userId) }, { receiverId: String(userId) }] },
+      orderBy: { createdAt: "desc" },
+      take: 8
+    })
+  ]);
+
+  const recentActivity = [...calls.map(normalizeCallEvent), ...messages.map(normalizeMessage)]
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .slice(0, 8);
+
+  return { totalContacts, unreadMessages, missedCalls, todaysCalls, pendingRequests, recentActivity };
+}
+
+export async function getAdminMetrics(onlineUserCount = 0) {
+  const [totalUsers, totalMessages, totalCalls, missedCalls, mediaFiles, pendingContactRequests] = await Promise.all([
+    prisma.user.count(),
+    prisma.message.count(),
+    prisma.callEvent.count(),
+    prisma.callEvent.count({ where: { status: "missed" } }),
+    prisma.mediaFile.count(),
+    prisma.contactRequest.count({ where: { status: "pending" } })
+  ]);
+  return { totalUsers, onlineUsers: onlineUserCount, totalMessages, totalCalls, missedCalls, mediaFiles, pendingContactRequests };
+}
+
+export async function listAdminUsers() {
+  return prisma.user.findMany({
+    orderBy: { createdAt: "desc" },
+    select: { id: true, name: true, email: true, phone: true, role: true, isBlocked: true, createdAt: true }
+  });
+}
+
+export async function setUserBlocked(userId, isBlocked) {
+  return publicUser(await prisma.user.update({ where: { id: String(userId) }, data: { isBlocked: Boolean(isBlocked) } }));
+}
+
+export async function listAdminCallEvents() {
+  return prisma.callEvent.findMany({
+    include: {
+      caller: { select: { id: true, name: true, email: true } },
+      receiver: { select: { id: true, name: true, email: true } }
+    },
+    orderBy: { createdAt: "desc" },
+    take: 100
+  });
+}
+
+export async function getAdminMessageStats() {
+  const [byType, delivered, read, sent] = await Promise.all([
+    prisma.message.groupBy({ by: ["type"], _count: { _all: true } }),
+    prisma.message.count({ where: { status: "delivered" } }),
+    prisma.message.count({ where: { status: "read" } }),
+    prisma.message.count({ where: { status: "sent" } })
+  ]);
+  return { byType, statuses: { sent, delivered, read } };
+}
+
+export async function listAdminMediaFiles() {
+  return prisma.mediaFile.findMany({
+    include: { uploader: { select: { id: true, name: true, email: true } } },
+    orderBy: { createdAt: "desc" },
+    take: 100
+  });
 }

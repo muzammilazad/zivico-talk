@@ -2,6 +2,8 @@ import express from "express";
 import { authRequired } from "../middleware/auth.js";
 import {
   deleteMessageReaction,
+  deleteMessage,
+  editMessage,
   findMessageForUser,
   forwardMessage,
   getConversation,
@@ -59,6 +61,32 @@ router.post("/:messageId/forward", authRequired, async (req, res) => {
   } catch (err) {
     return res.status(err.statusCode || 500).json({ message: err.message || "Could not forward message" });
   }
+});
+
+router.patch("/:messageId", authRequired, async (req, res) => {
+  const text = String(req.body.text || "").trim();
+  if (!text) return res.status(400).json({ message: "Text is required" });
+
+  const message = await editMessage({ messageId: req.params.messageId, userId: req.user.id, text });
+  if (!message) return res.status(404).json({ message: "Editable message not found" });
+
+  const io = req.app.get("io");
+  io?.to(String(message.senderId)).emit("message-updated", message);
+  io?.to(String(message.receiverId)).emit("message-updated", message);
+  return res.json(message);
+});
+
+router.delete("/:messageId", authRequired, async (req, res) => {
+  const scope = req.query.scope === "everyone" ? "everyone" : "me";
+  const result = await deleteMessage({ messageId: req.params.messageId, userId: req.user.id, scope });
+  if (!result) return res.status(404).json({ message: "Message not found" });
+
+  const io = req.app.get("io");
+  if (result.scope === "everyone") {
+    io?.to(String(result.message.senderId)).emit("message-deleted", result.message);
+    io?.to(String(result.message.receiverId)).emit("message-deleted", result.message);
+  }
+  return res.json(result);
 });
 
 router.post("/:messageId/reactions", authRequired, async (req, res) => {

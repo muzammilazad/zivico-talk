@@ -3,6 +3,7 @@ import { v4 as uuid } from "uuid";
 import { authRequired } from "../middleware/auth.js";
 import {
   acceptContactRequest,
+  createNotification,
   createContactRequest,
   findUserById,
   getContactStatus,
@@ -29,13 +30,18 @@ router.post("/", authRequired, async (req, res) => {
   if (contactStatus.status === "accepted") return res.status(409).json({ message: "Already contacts" });
   if (contactStatus.status === "pending") return res.status(409).json({ message: "Request pending" });
 
-  const request = await createContactRequest({
-    id: uuid(),
-    requesterId: req.user.id,
-    receiverId,
-    status: "pending",
-    createdAt: new Date().toISOString()
-  });
+  let request;
+  try {
+    request = await createContactRequest({
+      id: uuid(),
+      requesterId: req.user.id,
+      receiverId,
+      status: "pending",
+      createdAt: new Date().toISOString()
+    });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ message: err.message || "Unable to create contact request" });
+  }
 
   const payload = {
     ...request,
@@ -44,6 +50,13 @@ router.post("/", authRequired, async (req, res) => {
   const io = req.app.get("io");
   io?.to(String(receiverId)).emit("contact-request-received", payload);
   io?.to(String(req.user.id)).emit("contact-request-sent", payload);
+  const notification = await createNotification({
+    userId: receiverId,
+    type: "contact_request",
+    title: "New contact request",
+    body: `${req.user.name} wants to connect`
+  });
+  io?.to(String(receiverId)).emit("notification-created", notification);
   console.log("contact request sent", request.id);
 
   return res.status(201).json(payload);
@@ -56,6 +69,13 @@ router.post("/:requestId/accept", authRequired, async (req, res) => {
   const io = req.app.get("io");
   io?.to(String(result.request.requesterId)).emit("contact-request-accepted", result);
   io?.to(String(result.request.receiverId)).emit("contact-request-accepted", result);
+  const notification = await createNotification({
+    userId: result.request.requesterId,
+    type: "contact_accepted",
+    title: "Contact request accepted",
+    body: `${req.user.name} accepted your request`
+  });
+  io?.to(String(result.request.requesterId)).emit("notification-created", notification);
   console.log("contact request accepted", result.request.id);
 
   return res.json(result);

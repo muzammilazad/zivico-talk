@@ -104,6 +104,14 @@ Uploaded files are stored in `backend/uploads/` and served from `/uploads/:filen
 
 - `DATABASE_URL invalid`: confirm MySQL is running, the database exists, and `.env` uses the right username/password.
 - `port already in use`: change `PORT` in `backend/.env` or stop the process using port `4000`.
+- Windows port check:
+  ```bat
+  netstat -ano | findstr :4000
+  ```
+- Windows kill process:
+  ```bat
+  taskkill /PID <PID> /F
+  ```
 - `uploads folder missing`: the backend creates `backend/uploads/` automatically on start/upload.
 - `CORS issue`: make sure `FRONTEND_URL` matches the frontend URL, usually `http://localhost:5173`.
 - Prisma client errors: run `npm run prisma:generate` after changing `prisma/schema.prisma`.

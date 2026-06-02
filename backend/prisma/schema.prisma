@@ -14,6 +14,17 @@ model User {
   phone        String?  @unique
   passwordHash String
   avatarUrl    String?
+  role         String   @default("client")
+  isSystem     Boolean  @default(false)
+  isBlocked    Boolean  @default(false)
+  about        String?
+  showOnline   Boolean  @default(true)
+  showLastSeen Boolean  @default(true)
+  readReceipts Boolean  @default(true)
+  notifyMessages Boolean @default(true)
+  notifyCalls    Boolean @default(true)
+  notifyContacts Boolean @default(true)
+  lastSeenAt   DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -27,6 +38,7 @@ model User {
   outgoingCalls        CallEvent[]      @relation("OutgoingCalls")
   incomingCalls        CallEvent[]      @relation("IncomingCalls")
   mediaFiles           MediaFile[]
+  notifications        Notification[]
 }
 
 model Contact {
@@ -70,6 +82,9 @@ model Message {
   mediaDurationSeconds Int?
   replyToMessageId String?
   isForwarded Boolean @default(false)
+  isDeletedForEveryone Boolean @default(false)
+  deletedForUserIds String? @db.Text
+  editedAt      DateTime?
   status        String   @default("sent")
   createdAt     DateTime @default(now())
 
@@ -125,4 +140,18 @@ model MediaFile {
   createdAt  DateTime @default(now())
 
   uploader User @relation(fields: [uploaderId], references: [id], onDelete: Cascade)
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  type      String
+  title     String
+  body      String?
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead, createdAt])
 }

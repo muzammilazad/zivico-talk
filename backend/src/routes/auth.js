@@ -2,14 +2,15 @@ import bcrypt from "bcryptjs";
 import express from "express";
 import jwt from "jsonwebtoken";
 import { v4 as uuid } from "uuid";
-import { createUser, findUserByEmail, findUserByPhone } from "../services/store.js";
+import { ensureSupportContactForUser } from "../services/defaultAccounts.js";
+import { createUser, ensureAdminRole, findUserByEmail, findUserByPhone } from "../services/store.js";
 
 const router = express.Router();
 const jwtSecret = process.env.JWT_SECRET || "zivico-talk-local-dev-secret";
 
 function signToken(user) {
   return jwt.sign(
-    { userId: user.id, id: user.id, name: user.name, email: user.email, phone: user.phone || "" },
+    { userId: user.id, id: user.id, name: user.name, email: user.email, phone: user.phone || "", role: user.role || "user" },
     jwtSecret,
     { expiresIn: "7d" }
   );
@@ -17,6 +18,13 @@ function signToken(user) {
 
 function validEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function handleAuthError(res, error) {
+  console.error(error);
+  return res.status(503).json({
+    message: "Database connection failed. Check DATABASE_URL in backend/.env and make sure MySQL is running."
+  });
 }
 
 router.post("/register", async (req, res) => {
@@ -38,39 +46,50 @@ router.post("/register", async (req, res) => {
     return res.status(400).json({ message: "Password must be at least 6 characters" });
   }
 
-  const existing = await findUserByEmail(email);
-  if (existing) {
-    return res.status(409).json({ message: "Email is already registered" });
-  }
-  if (phone && (await findUserByPhone(phone))) {
-    return res.status(409).json({ message: "Phone number is already registered" });
-  }
+  try {
+    const existing = await findUserByEmail(email);
+    if (existing) {
+      return res.status(409).json({ message: "Email is already registered" });
+    }
+    if (phone && (await findUserByPhone(phone))) {
+      return res.status(409).json({ message: "Phone number is already registered" });
+    }
 
-  const passwordHash = await bcrypt.hash(password, 10);
-  const user = await createUser({
-    id: uuid(),
-    name,
-    email,
-    phone,
-    passwordHash,
-    createdAt: new Date().toISOString()
-  });
+    const passwordHash = await bcrypt.hash(password, 10);
+    const user = await createUser({
+      id: uuid(),
+      name,
+      email,
+      phone,
+      role: "client",
+      passwordHash,
+      createdAt: new Date().toISOString()
+    });
+    await ensureSupportContactForUser(user);
 
-  const { passwordHash: _passwordHash, ...safeUser } = user;
-  return res.status(201).json({ token: signToken(user), user: safeUser });
+    const { passwordHash: _passwordHash, ...safeUser } = user;
+    return res.status(201).json({ token: signToken(user), user: safeUser });
+  } catch (error) {
+    return handleAuthError(res, error);
+  }
 });
 
 router.post("/login", async (req, res) => {
   const email = String(req.body.email || "").trim().toLowerCase();
   const password = String(req.body.password || "");
-  const user = await findUserByEmail(email);
 
-  if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
-    return res.status(401).json({ message: "Invalid email or password" });
+  try {
+    const user = await findUserByEmail(email);
+
+    if (!user || user.isBlocked || !(await bcrypt.compare(password, user.passwordHash))) {
+      return res.status(401).json({ message: "Invalid email or password" });
+    }
+
+    const safeUser = await ensureAdminRole(user);
+    return res.json({ token: signToken(safeUser), user: safeUser });
+  } catch (error) {
+    return handleAuthError(res, error);
   }
-
-  const { passwordHash, ...safeUser } = user;
-  return res.json({ token: signToken(user), user: safeUser });
 });
 
 export default router;
