@@ -19,7 +19,8 @@ import AuthPanel from "./components/AuthPanel";
 import ChatWindow from "./components/ChatWindow";
 import UserList from "./components/UserList";
 import VideoCallModal from "./components/VideoCallModal";
-import { API_URL, api } from "./lib/api";
+import { api } from "./lib/api";
+import { API_BASE_URL } from "./lib/config";
 import { createSocket } from "./lib/socket";
 
 const emptySession = { token: "", user: null };
@@ -83,7 +84,7 @@ function getPreviewText(item) {
 
 function mediaSrc(url) {
   if (!url) return "";
-  return url.startsWith("http") ? url : `${API_URL}${url}`;
+  return url.startsWith("http") ? url : `${API_BASE_URL}${url}`;
 }
 
 function currentUserAvatar(user) {
@@ -1485,7 +1486,7 @@ export default function App() {
           )}
         </nav>
         <UserList
-          apiUrl={API_URL}
+          apiUrl={API_BASE_URL}
           users={sortedUsers}
           selectedUser={selectedUser}
           onlineIds={onlineIds}
@@ -1517,7 +1518,7 @@ export default function App() {
             onCancelReply={() => setReplyToMessage(null)}
             onForwardMessage={forwardMessage}
             onStartCall={startCall}
-            apiUrl={API_URL}
+            apiUrl={API_BASE_URL}
           />
         )}
         {activeView === "chats" && !selectedUser && (

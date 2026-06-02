@@ -1,10 +1,8 @@
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
-
-export { API_URL };
+import { API_BASE_URL } from "./config";
 
 export async function api(path, options = {}, token) {
   const isFormData = options.body instanceof FormData;
-  const response = await fetch(`${API_URL}${path}`, {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
     headers: {
       ...(isFormData ? {} : { "Content-Type": "application/json" }),

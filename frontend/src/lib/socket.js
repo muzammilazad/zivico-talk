@@ -1,8 +1,8 @@
 import { io } from "socket.io-client";
-import { API_URL } from "./api";
+import { SOCKET_URL } from "./config";
 
 export function createSocket(token) {
-  return io(API_URL, {
+  return io(SOCKET_URL, {
     auth: { token },
     transports: ["websocket", "polling"]
   });
