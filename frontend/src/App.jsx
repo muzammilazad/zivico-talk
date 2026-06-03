@@ -399,7 +399,7 @@ export default function App() {
 
   function getIncomingRingtone() {
     if (!incomingRingtoneRef.current) {
-      incomingRingtoneRef.current = new Audio("/sounds/incoming-ringtone.mp3");
+      incomingRingtoneRef.current = new Audio("/sounds/incoming-ringtone.wav");
       incomingRingtoneRef.current.loop = true;
     }
     return incomingRingtoneRef.current;
@@ -407,7 +407,7 @@ export default function App() {
 
   function getOutgoingRingback() {
     if (!outgoingRingbackRef.current) {
-      outgoingRingbackRef.current = new Audio("/sounds/outgoing-ringback.mp3");
+      outgoingRingbackRef.current = new Audio("/sounds/outgoing-ringback.wav");
       outgoingRingbackRef.current.loop = true;
     }
     return outgoingRingbackRef.current;
@@ -424,6 +424,7 @@ export default function App() {
   }
 
   function stopOutgoingRingback() {
+    console.log("Stopping outgoing ringback");
     resetAudio(outgoingRingbackRef.current);
   }
 
@@ -432,8 +433,11 @@ export default function App() {
     const audio = getIncomingRingtone();
     try {
       audio.currentTime = 0;
-      audio.play().catch(() => {});
-    } catch {
+      audio.play().catch((err) => {
+        console.error("Incoming ringtone play error", err);
+      });
+    } catch (err) {
+      console.error("Incoming ringtone play error", err);
       // Browser autoplay policies can block call sounds until the user interacts.
     }
   }
@@ -442,9 +446,13 @@ export default function App() {
     stopIncomingRingtone();
     const audio = getOutgoingRingback();
     try {
+      console.log("Playing outgoing ringback");
       audio.currentTime = 0;
-      audio.play().catch(() => {});
-    } catch {
+      audio.play().catch((err) => {
+        console.error("Outgoing ringback play error", err);
+      });
+    } catch (err) {
+      console.error("Outgoing ringback play error", err);
       // Browser autoplay policies can block call sounds until the user interacts.
     }
   }
@@ -1328,10 +1336,10 @@ export default function App() {
     if (!selectedUser || !socketRef.current) return;
 
     try {
+      playOutgoingRingback();
       await prepareLocalMedia(type);
       createPeerConnection(selectedUser.id, type);
       setCall({ peer: selectedUser, type, status: "ringing", isCaller: true });
-      playOutgoingRingback();
       callStartedAtRef.current = Date.now();
       console.log("call type sent", type);
       socketRef.current.emit("call-user", { to: selectedUser.id, callType: type });
