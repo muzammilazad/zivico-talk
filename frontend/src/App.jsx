@@ -40,6 +40,52 @@ const SCREEN_SHARE_VIDEO_CONSTRAINTS = {
 const INCOMING_RINGTONE_PATH = "/sounds/incoming-ringtone.wav";
 const OUTGOING_RINGBACK_PATH = "/sounds/outgoing-ringback.wav";
 const CALL_AUDIO_UNLOCKED_KEY = "zivico-call-audio-unlocked";
+const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY || "";
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = `${base64String}${padding}`.replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+
+  for (let index = 0; index < rawData.length; index += 1) {
+    outputArray[index] = rawData.charCodeAt(index);
+  }
+
+  return outputArray;
+}
+
+function normalizeIncomingCallPayload(payload = {}) {
+  const fromUser = payload.fromUser || {
+    id: payload.from || payload.callerId || "",
+    name: payload.callerName || "Zivico user",
+    email: payload.callerEmail || ""
+  };
+
+  return {
+    from: payload.from || payload.callerId || fromUser.id,
+    fromUser,
+    callType: payload.callType || "voice"
+  };
+}
+
+function readIncomingCallFromUrl() {
+  try {
+    const url = new URL(window.location.href);
+    const rawCall = url.searchParams.get("incomingCall");
+    if (!rawCall) return null;
+
+    url.searchParams.delete("incomingCall");
+    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+    return normalizeIncomingCallPayload(JSON.parse(rawCall));
+  } catch {
+    return null;
+  }
+}
+
+function isAppForegrounded() {
+  return document.visibilityState === "visible" && document.hasFocus();
+}
 
 function loadSavedSession() {
   try {
@@ -380,6 +426,9 @@ export default function App() {
   const [screenSharing, setScreenSharing] = useState(false);
   const [remoteStream, setRemoteStream] = useState(null);
   const [audioUnlocked, setAudioUnlocked] = useState(false);
+  const [notificationPermission, setNotificationPermission] = useState(
+    typeof Notification === "undefined" ? "unsupported" : Notification.permission
+  );
 
   const socketRef = useRef(null);
   const selectedUserRef = useRef(null);
@@ -399,6 +448,7 @@ export default function App() {
   const incomingRingtoneRef = useRef(null);
   const outgoingRingbackRef = useRef(null);
   const audioUnlockedRef = useRef(audioUnlocked);
+  const serviceWorkerRegistrationRef = useRef(null);
 
   const currentUser = session.user;
 
@@ -539,6 +589,125 @@ export default function App() {
   useEffect(() => {
     audioUnlockedRef.current = audioUnlocked;
   }, [audioUnlocked]);
+
+  async function registerPushSubscription(registration) {
+    if (!registration?.pushManager || !session.token) return;
+
+    try {
+      const key =
+        VAPID_PUBLIC_KEY ||
+        (await api("/api/push/vapid-public-key", {}, session.token)
+          .then((data) => data.publicKey)
+          .catch(() => ""));
+      if (!key) return;
+
+      const existingSubscription = await registration.pushManager.getSubscription();
+      const subscription =
+        existingSubscription ||
+        (await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(key)
+        }));
+
+      await api("/api/push/subscribe", { method: "POST", body: JSON.stringify({ subscription }) }, session.token);
+    } catch (err) {
+      console.warn("Push subscription unavailable", err);
+    }
+  }
+
+  async function setupCallNotifications() {
+    if (!("serviceWorker" in navigator)) return;
+
+    try {
+      const registration = await navigator.serviceWorker.register("/sw.js");
+      serviceWorkerRegistrationRef.current = registration;
+
+      if ("Notification" in window) {
+        const permission =
+          Notification.permission === "default" ? await Notification.requestPermission() : Notification.permission;
+        setNotificationPermission(permission);
+        if (permission === "granted") {
+          await registerPushSubscription(registration);
+        }
+      }
+    } catch (err) {
+      console.warn("Service worker registration failed", err);
+    }
+  }
+
+  async function showIncomingCallNotification(callPayload) {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+
+    const call = normalizeIncomingCallPayload(callPayload);
+
+    try {
+      const registration = serviceWorkerRegistrationRef.current || (await navigator.serviceWorker?.ready);
+      if (registration?.active) {
+        registration.active.postMessage({ type: "show-incoming-call-notification", call });
+        return;
+      }
+      if (registration?.showNotification) {
+        await registration.showNotification("Incoming call", {
+          body: call.fromUser?.name || "Zivico user",
+          tag: `incoming-call-${call.from || "unknown"}`,
+          renotify: true,
+          requireInteraction: true,
+          data: { type: "incoming-call", call }
+        });
+        return;
+      }
+
+      const notification = new Notification("Incoming call", {
+        body: call.fromUser?.name || "Zivico user"
+      });
+      notification.onclick = () => {
+        window.focus();
+        setIncomingCall(call);
+      };
+    } catch (err) {
+      console.warn("Incoming call notification failed", err);
+    }
+  }
+
+  function showIncomingCall(callPayload, { shouldRing = isAppForegrounded() } = {}) {
+    const nextIncomingCall = normalizeIncomingCallPayload(callPayload);
+    setIncomingCall(nextIncomingCall);
+    setActiveView("chats");
+
+    if (shouldRing) {
+      playIncomingRingtone();
+    } else {
+      // PWAs can show a background notification, but browsers do not allow true
+      // WhatsApp-style continuous background ringing from web code. Production
+      // Android/iOS apps need native push plus call notification APIs for that.
+      showIncomingCallNotification(nextIncomingCall);
+    }
+  }
+
+  useEffect(() => {
+    if (!currentUser) return;
+
+    setupCallNotifications();
+
+    const pendingCall = readIncomingCallFromUrl();
+    if (pendingCall) {
+      showIncomingCall(pendingCall, { shouldRing: false });
+    }
+  }, [currentUser?.id]);
+
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+
+    function handleServiceWorkerMessage(event) {
+      if (event.data?.type !== "incoming-call-notification-click" || !event.data.call) return;
+      showIncomingCall(event.data.call, { shouldRing: false });
+    }
+
+    navigator.serviceWorker.addEventListener("message", handleServiceWorkerMessage);
+    return () => {
+      navigator.serviceWorker.removeEventListener("message", handleServiceWorkerMessage);
+    };
+  }, []);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -747,8 +916,7 @@ export default function App() {
     function handleCallUser({ from, fromUser, callType }) {
       console.log("Incoming call received");
       console.log("incoming call type received", callType);
-      playIncomingRingtone();
-      setIncomingCall({ from, fromUser, callType });
+      showIncomingCall({ from, fromUser, callType });
     }
 
     async function handleCallAccepted({ from, callType }) {

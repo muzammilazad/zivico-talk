@@ -99,6 +99,11 @@ export function setupSocket(io) {
     socket.on("call-user", ({ to, callType, fromOffer }) => {
       const type = callType || "voice";
       console.log("call type sent", type);
+      // For a production WhatsApp-like experience, this is also where the
+      // backend should send a native/Web Push incoming-call notification to the
+      // receiver's saved push subscriptions. Web browsers can wake a service
+      // worker for a notification, but true background ringing/call UI needs
+      // native Android/iOS push plus call-notification APIs.
       io.to(to).emit("call-user", {
         from: user.id,
         fromUser: { id: user.id, name: user.name, email: user.email },
