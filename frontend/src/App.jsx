@@ -37,6 +37,8 @@ const SCREEN_SHARE_VIDEO_CONSTRAINTS = {
   height: { max: 720 },
   frameRate: { max: 10 }
 };
+const INCOMING_RINGTONE_PATH = "/sounds/incoming-ringtone.wav";
+const OUTGOING_RINGBACK_PATH = "/sounds/outgoing-ringback.wav";
 
 function loadSavedSession() {
   try {
@@ -399,7 +401,7 @@ export default function App() {
 
   function getIncomingRingtone() {
     if (!incomingRingtoneRef.current) {
-      incomingRingtoneRef.current = new Audio("/sounds/incoming-ringtone.wav");
+      incomingRingtoneRef.current = new Audio(INCOMING_RINGTONE_PATH);
       incomingRingtoneRef.current.loop = true;
     }
     return incomingRingtoneRef.current;
@@ -407,7 +409,7 @@ export default function App() {
 
   function getOutgoingRingback() {
     if (!outgoingRingbackRef.current) {
-      outgoingRingbackRef.current = new Audio("/sounds/outgoing-ringback.wav");
+      outgoingRingbackRef.current = new Audio(OUTGOING_RINGBACK_PATH);
       outgoingRingbackRef.current.loop = true;
     }
     return outgoingRingbackRef.current;
@@ -420,6 +422,9 @@ export default function App() {
   }
 
   function stopIncomingRingtone() {
+    if (incomingRingtoneRef.current) {
+      console.log("Stopping incoming ringtone");
+    }
     resetAudio(incomingRingtoneRef.current);
   }
 
@@ -432,12 +437,16 @@ export default function App() {
     stopOutgoingRingback();
     const audio = getIncomingRingtone();
     try {
+      console.log("Playing incoming ringtone");
       audio.currentTime = 0;
-      audio.play().catch((err) => {
-        console.error("Incoming ringtone play error", err);
-      });
+      const playPromise = audio.play();
+      if (playPromise?.catch) {
+        playPromise.catch((err) => {
+          console.error("audio.play() error if blocked", err);
+        });
+      }
     } catch (err) {
-      console.error("Incoming ringtone play error", err);
+      console.error("audio.play() error if blocked", err);
       // Browser autoplay policies can block call sounds until the user interacts.
     }
   }
@@ -448,11 +457,14 @@ export default function App() {
     try {
       console.log("Playing outgoing ringback");
       audio.currentTime = 0;
-      audio.play().catch((err) => {
-        console.error("Outgoing ringback play error", err);
-      });
+      const playPromise = audio.play();
+      if (playPromise?.catch) {
+        playPromise.catch((err) => {
+          console.error("audio.play() error if blocked", err);
+        });
+      }
     } catch (err) {
-      console.error("Outgoing ringback play error", err);
+      console.error("audio.play() error if blocked", err);
       // Browser autoplay policies can block call sounds until the user interacts.
     }
   }
@@ -662,6 +674,7 @@ export default function App() {
     }
 
     function handleCallUser({ from, fromUser, callType }) {
+      console.log("Incoming call received");
       console.log("incoming call type received", callType);
       playIncomingRingtone();
       setIncomingCall({ from, fromUser, callType });
