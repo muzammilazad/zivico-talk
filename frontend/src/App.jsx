@@ -39,6 +39,7 @@ const SCREEN_SHARE_VIDEO_CONSTRAINTS = {
 };
 const INCOMING_RINGTONE_PATH = "/sounds/incoming-ringtone.wav";
 const OUTGOING_RINGBACK_PATH = "/sounds/outgoing-ringback.wav";
+const CALL_AUDIO_UNLOCKED_KEY = "zivico-call-audio-unlocked";
 
 function loadSavedSession() {
   try {
@@ -378,6 +379,7 @@ export default function App() {
   const [cameraOff, setCameraOff] = useState(false);
   const [screenSharing, setScreenSharing] = useState(false);
   const [remoteStream, setRemoteStream] = useState(null);
+  const [audioUnlocked, setAudioUnlocked] = useState(false);
 
   const socketRef = useRef(null);
   const selectedUserRef = useRef(null);
@@ -396,6 +398,7 @@ export default function App() {
   const remoteVideoRef = useRef(null);
   const incomingRingtoneRef = useRef(null);
   const outgoingRingbackRef = useRef(null);
+  const audioUnlockedRef = useRef(audioUnlocked);
 
   const currentUser = session.user;
 
@@ -403,6 +406,7 @@ export default function App() {
     if (!incomingRingtoneRef.current) {
       incomingRingtoneRef.current = new Audio(INCOMING_RINGTONE_PATH);
       incomingRingtoneRef.current.loop = true;
+      incomingRingtoneRef.current.preload = "auto";
     }
     return incomingRingtoneRef.current;
   }
@@ -411,6 +415,7 @@ export default function App() {
     if (!outgoingRingbackRef.current) {
       outgoingRingbackRef.current = new Audio(OUTGOING_RINGBACK_PATH);
       outgoingRingbackRef.current.loop = true;
+      outgoingRingbackRef.current.preload = "auto";
     }
     return outgoingRingbackRef.current;
   }
@@ -434,6 +439,7 @@ export default function App() {
   }
 
   function playIncomingRingtone() {
+    if (!audioUnlockedRef.current) return;
     stopOutgoingRingback();
     const audio = getIncomingRingtone();
     try {
@@ -468,6 +474,71 @@ export default function App() {
       // Browser autoplay policies can block call sounds until the user interacts.
     }
   }
+
+  async function unlockCallAudio() {
+    const incomingAudio = getIncomingRingtone();
+    const outgoingAudio = getOutgoingRingback();
+    const audioItems = [incomingAudio, outgoingAudio];
+    const previousSettings = audioItems.map((audio) => ({
+      audio,
+      muted: audio.muted,
+      volume: audio.volume
+    }));
+
+    try {
+      audioItems.forEach((audio) => {
+        audio.muted = true;
+        audio.volume = 0.01;
+        audio.currentTime = 0;
+      });
+
+      await Promise.all(audioItems.map((audio) => audio.play()));
+
+      audioItems.forEach((audio) => {
+        audio.pause();
+        audio.currentTime = 0;
+      });
+      previousSettings.forEach(({ audio, muted, volume }) => {
+        audio.muted = muted;
+        audio.volume = volume;
+      });
+
+      setAudioUnlocked(true);
+      audioUnlockedRef.current = true;
+      try {
+        localStorage.setItem(CALL_AUDIO_UNLOCKED_KEY, "true");
+      } catch {
+        // Audio unlock is still valid for this page even if storage is unavailable.
+      }
+      console.log("Call audio unlocked");
+      if (incomingCallRef.current && !callRef.current) {
+        playIncomingRingtone();
+      }
+      return true;
+    } catch (err) {
+      audioItems.forEach((audio) => {
+        audio.pause();
+        audio.currentTime = 0;
+      });
+      previousSettings.forEach(({ audio, muted, volume }) => {
+        audio.muted = muted;
+        audio.volume = volume;
+      });
+      setAudioUnlocked(false);
+      audioUnlockedRef.current = false;
+      try {
+        localStorage.removeItem(CALL_AUDIO_UNLOCKED_KEY);
+      } catch {
+        // Ignore storage errors while reporting the actual audio unlock failure.
+      }
+      console.error("Call audio unlock failed", err);
+      return false;
+    }
+  }
+
+  useEffect(() => {
+    audioUnlockedRef.current = audioUnlocked;
+  }, [audioUnlocked]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -1349,6 +1420,9 @@ export default function App() {
     if (!selectedUser || !socketRef.current) return;
 
     try {
+      if (!audioUnlockedRef.current) {
+        await unlockCallAudio();
+      }
       playOutgoingRingback();
       await prepareLocalMedia(type);
       createPeerConnection(selectedUser.id, type);
@@ -1618,6 +1692,14 @@ export default function App() {
             <small>{currentUser.name}</small>
           </span>
         </div>
+        {!audioUnlocked && (
+          <div className="call-audio-banner">
+            <span>Tap to enable call sounds on mobile</span>
+            <button type="button" onClick={unlockCallAudio}>
+              Enable Call Sounds
+            </button>
+          </div>
+        )}
         <span className="topbar-actions">
           {canViewNotifications && (
             <button className="icon-button" type="button" title="Notifications" onClick={() => setShowNotifications((value) => !value)}>
