@@ -58,9 +58,15 @@ const io = new Server(server, {
 app.set("io", io);
 setupSocket(io);
 
-await seedDefaultAccounts().catch((error) => {
-  console.error("Default account seed skipped:", error.message);
-});
+await seedDefaultAccounts()
+  .then(({ support }) => {
+    if (!support) return;
+    console.log("Default support account ensured");
+    console.log(`Support email: ${support.email}`);
+  })
+  .catch((error) => {
+    console.error("Default account seed skipped:", error.message);
+  });
 
 server.on("error", (error) => {
   if (error.code === "EADDRINUSE") {

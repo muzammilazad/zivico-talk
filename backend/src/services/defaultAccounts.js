@@ -35,6 +35,8 @@ export async function ensureDefaultSupportAccount() {
   const phoneOwner = config.phone ? await prisma.user.findUnique({ where: { phone: config.phone } }) : null;
   const phoneIsAvailable = config.phone && (!phoneOwner || phoneOwner.email === config.email);
   const existing = await prisma.user.findUnique({ where: { email: config.email } });
+  const passwordHash = await bcrypt.hash(config.password, 10);
+
   if (existing) {
     return prisma.user.update({
       where: { id: existing.id },
@@ -42,6 +44,8 @@ export async function ensureDefaultSupportAccount() {
         name: config.name,
         role: "support",
         isSystem: true,
+        isBlocked: false,
+        passwordHash,
         ...(phoneIsAvailable ? { phone: config.phone } : {})
       }
     });
@@ -54,7 +58,8 @@ export async function ensureDefaultSupportAccount() {
       phone: phoneIsAvailable ? config.phone : null,
       role: "support",
       isSystem: true,
-      passwordHash: await bcrypt.hash(config.password, 10)
+      isBlocked: false,
+      passwordHash
     }
   });
 }
@@ -101,15 +106,15 @@ export async function ensureSupportContactsForAllClients() {
   const support = await ensureDefaultSupportAccount();
   if (!support) return null;
 
-  const clients = await prisma.user.findMany({
+  const users = await prisma.user.findMany({
     where: {
-      id: { not: support.id },
-      OR: [{ role: "client" }, { role: "user" }]
+      id: { not: support.id }
     }
   });
 
-  for (const client of clients) {
-    await ensureSupportContactForUser(client);
+  for (const user of users) {
+    await upsertContactPair(user.id, support.id);
+    await upsertContactPair(support.id, user.id);
   }
 
   return support;
