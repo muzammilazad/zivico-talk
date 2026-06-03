@@ -392,8 +392,62 @@ export default function App() {
   const pendingIceCandidatesRef = useRef([]);
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
+  const incomingRingtoneRef = useRef(null);
+  const outgoingRingbackRef = useRef(null);
 
   const currentUser = session.user;
+
+  function getIncomingRingtone() {
+    if (!incomingRingtoneRef.current) {
+      incomingRingtoneRef.current = new Audio("/sounds/incoming-ringtone.mp3");
+      incomingRingtoneRef.current.loop = true;
+    }
+    return incomingRingtoneRef.current;
+  }
+
+  function getOutgoingRingback() {
+    if (!outgoingRingbackRef.current) {
+      outgoingRingbackRef.current = new Audio("/sounds/outgoing-ringback.mp3");
+      outgoingRingbackRef.current.loop = true;
+    }
+    return outgoingRingbackRef.current;
+  }
+
+  function resetAudio(audio) {
+    if (!audio) return;
+    audio.pause();
+    audio.currentTime = 0;
+  }
+
+  function stopIncomingRingtone() {
+    resetAudio(incomingRingtoneRef.current);
+  }
+
+  function stopOutgoingRingback() {
+    resetAudio(outgoingRingbackRef.current);
+  }
+
+  function playIncomingRingtone() {
+    stopOutgoingRingback();
+    const audio = getIncomingRingtone();
+    try {
+      audio.currentTime = 0;
+      audio.play().catch(() => {});
+    } catch {
+      // Browser autoplay policies can block call sounds until the user interacts.
+    }
+  }
+
+  function playOutgoingRingback() {
+    stopIncomingRingtone();
+    const audio = getOutgoingRingback();
+    try {
+      audio.currentTime = 0;
+      audio.play().catch(() => {});
+    } catch {
+      // Browser autoplay policies can block call sounds until the user interacts.
+    }
+  }
 
   useEffect(() => {
     if (!currentUser) return;
@@ -601,6 +655,7 @@ export default function App() {
 
     function handleCallUser({ from, fromUser, callType }) {
       console.log("incoming call type received", callType);
+      playIncomingRingtone();
       setIncomingCall({ from, fromUser, callType });
     }
 
@@ -608,6 +663,7 @@ export default function App() {
       const activeCall = callRef.current;
       if (!activeCall || String(activeCall.peer.id) !== String(from) || !pcRef.current) return;
 
+      stopOutgoingRingback();
       setCall({ ...activeCall, status: "connected" });
       const offer = await pcRef.current.createOffer();
       await pcRef.current.setLocalDescription(offer);
@@ -1247,6 +1303,10 @@ export default function App() {
     };
     pc.onconnectionstatechange = () => {
       console.log("webrtc connection state", pc.connectionState);
+      if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
+        stopIncomingRingtone();
+        stopOutgoingRingback();
+      }
     };
     pc.onsignalingstatechange = () => {
       console.log("webrtc signaling state", pc.signalingState);
@@ -1271,6 +1331,7 @@ export default function App() {
       await prepareLocalMedia(type);
       createPeerConnection(selectedUser.id, type);
       setCall({ peer: selectedUser, type, status: "ringing", isCaller: true });
+      playOutgoingRingback();
       callStartedAtRef.current = Date.now();
       console.log("call type sent", type);
       socketRef.current.emit("call-user", { to: selectedUser.id, callType: type });
@@ -1284,6 +1345,7 @@ export default function App() {
     if (!incomingCall || !socketRef.current) return;
 
     try {
+      stopIncomingRingtone();
       await prepareLocalMedia(incomingCall.callType, { receivingScreen: incomingCall.callType === "screen" });
       createPeerConnection(incomingCall.from, incomingCall.callType);
       setCall({
@@ -1302,6 +1364,7 @@ export default function App() {
   }
 
   function rejectIncomingCall() {
+    stopIncomingRingtone();
     if (incomingCall && socketRef.current) {
       saveCallEvent({
         callType: incomingCall.callType || "voice",
@@ -1390,6 +1453,8 @@ export default function App() {
   }
 
   function endCallLocally() {
+    stopIncomingRingtone();
+    stopOutgoingRingback();
     pcRef.current?.close();
     pcRef.current = null;
     pendingIceCandidatesRef.current = [];
