@@ -22,8 +22,21 @@ import VideoCallModal from "./components/VideoCallModal";
 import { api } from "./lib/api";
 import { API_BASE_URL } from "./lib/config";
 import { createSocket } from "./lib/socket";
+import { ICE_SERVERS } from "./lib/webrtcConfig";
 
 const emptySession = { token: "", user: null };
+// Camera video is limited to 720p / 24fps for mobile stability and lower TURN usage.
+const CAMERA_VIDEO_CONSTRAINTS = {
+  width: { max: 1280 },
+  height: { max: 720 },
+  frameRate: { max: 24 }
+};
+// Screen share is limited to 720p / 10fps to reduce TURN bandwidth usage.
+const SCREEN_SHARE_VIDEO_CONSTRAINTS = {
+  width: { max: 1280 },
+  height: { max: 720 },
+  frameRate: { max: 10 }
+};
 
 function loadSavedSession() {
   try {
@@ -362,6 +375,7 @@ export default function App() {
   const [muted, setMuted] = useState(false);
   const [cameraOff, setCameraOff] = useState(false);
   const [screenSharing, setScreenSharing] = useState(false);
+  const [remoteStream, setRemoteStream] = useState(null);
 
   const socketRef = useRef(null);
   const selectedUserRef = useRef(null);
@@ -375,6 +389,7 @@ export default function App() {
   const localStreamRef = useRef(null);
   const cameraStreamRef = useRef(null);
   const remoteStreamRef = useRef(new MediaStream());
+  const pendingIceCandidatesRef = useRef([]);
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
 
@@ -417,6 +432,12 @@ export default function App() {
       remoteVideoRef.current.srcObject = remoteStreamRef.current;
     }
   }, [call]);
+
+  useEffect(() => {
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = remoteStream;
+    }
+  }, [remoteStream]);
 
   useEffect(() => {
     if (session.token) {
@@ -590,6 +611,7 @@ export default function App() {
       setCall({ ...activeCall, status: "connected" });
       const offer = await pcRef.current.createOffer();
       await pcRef.current.setLocalDescription(offer);
+      console.log("webrtc signaling state after local offer", pcRef.current.signalingState);
       socket.emit("offer", { to: from, offer, callType });
     }
 
@@ -598,27 +620,31 @@ export default function App() {
       if (!pcRef.current) {
         const fromUser = contacts.find((user) => String(user.id) === String(from)) || { id: from, name: "Caller", email: "" };
         await prepareLocalMedia(callType, { receivingScreen: callType === "screen" });
-        createPeerConnection(from);
+        createPeerConnection(from, callType);
         activeCall = { peer: fromUser, type: callType, status: "connected", isCaller: false };
         setCall(activeCall);
       }
 
       await pcRef.current.setRemoteDescription(new RTCSessionDescription(offer));
+      console.log("webrtc remote offer set", pcRef.current.signalingState);
+      await flushPendingIceCandidates();
       const answer = await pcRef.current.createAnswer();
       await pcRef.current.setLocalDescription(answer);
+      console.log("webrtc signaling state after local answer", pcRef.current.signalingState);
       socket.emit("answer", { to: from, answer, callType });
     }
 
     async function handleAnswer({ answer }) {
       if (pcRef.current) {
         await pcRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+        console.log("webrtc remote answer set", pcRef.current.signalingState);
+        await flushPendingIceCandidates();
       }
     }
 
     async function handleIceCandidate({ candidate }) {
-      if (pcRef.current && candidate) {
-        await pcRef.current.addIceCandidate(new RTCIceCandidate(candidate));
-      }
+      console.log("webrtc ice candidate received", candidate?.candidate || candidate?.type || "candidate");
+      await addOrQueueIceCandidate(candidate);
     }
 
     function handleEndCall({ from, callType, callStatus }) {
@@ -1102,30 +1128,42 @@ export default function App() {
 
   async function getCallStream(type, options = {}) {
     if (type === "screen" && options.receivingScreen) {
+      console.log("webrtc requesting receiver mic permission for screen call");
       return navigator.mediaDevices.getUserMedia({ audio: true, video: false }).catch(() => new MediaStream());
     }
 
     if (type === "screen") {
-      const displayStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      console.log("webrtc requesting display media");
+      const displayStream = await navigator.mediaDevices.getDisplayMedia({
+        video: SCREEN_SHARE_VIDEO_CONSTRAINTS,
+        audio: false
+      });
       const micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false }).catch(() => null);
-      const tracks = [...displayStream.getVideoTracks(), ...displayStream.getAudioTracks()];
+      const tracks = [...displayStream.getVideoTracks()];
       if (micStream) tracks.push(...micStream.getAudioTracks());
       return new MediaStream(tracks);
     }
 
+    console.log("webrtc requesting camera/mic permission", type);
     return navigator.mediaDevices.getUserMedia({
       audio: true,
-      video: type === "video"
+      video: type === "video" ? CAMERA_VIDEO_CONSTRAINTS : false
     });
   }
 
   async function prepareLocalMedia(type, options = {}) {
     const stream = await getCallStream(type, options);
     localStreamRef.current = stream;
-    cameraStreamRef.current = stream;
+    if (type !== "screen" || options.receivingScreen) {
+      cameraStreamRef.current = stream;
+    }
     if (localVideoRef.current) {
       localVideoRef.current.srcObject = stream;
     }
+    console.log(
+      "webrtc local stream added",
+      stream.getTracks().map((track) => `${track.kind}:${track.readyState}`)
+    );
     if (type === "screen" && !options.receivingScreen) {
       stream.getVideoTracks().forEach((track) => {
         track.onended = () => {
@@ -1140,36 +1178,88 @@ export default function App() {
     return stream;
   }
 
-  function createPeerConnection(peerId) {
+  async function addOrQueueIceCandidate(candidate) {
+    if (!candidate || !pcRef.current) return;
+
+    if (!pcRef.current.remoteDescription) {
+      pendingIceCandidatesRef.current.push(candidate);
+      console.log("webrtc ice candidate queued", pendingIceCandidatesRef.current.length);
+      return;
+    }
+
+    await pcRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+    console.log("webrtc ice candidate added");
+  }
+
+  async function flushPendingIceCandidates() {
+    if (!pcRef.current?.remoteDescription || pendingIceCandidatesRef.current.length === 0) return;
+
+    const candidates = [...pendingIceCandidatesRef.current];
+    pendingIceCandidatesRef.current = [];
+    for (const candidate of candidates) {
+      await pcRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+      console.log("webrtc queued ice candidate added");
+    }
+  }
+
+  function createPeerConnection(peerId, callType = "voice") {
     pcRef.current?.close();
     remoteStreamRef.current = new MediaStream();
+    pendingIceCandidatesRef.current = [];
+    setRemoteStream(remoteStreamRef.current);
 
     if (remoteVideoRef.current) {
       remoteVideoRef.current.srcObject = remoteStreamRef.current;
     }
 
-    const pc = new RTCPeerConnection({
-      iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
-    });
+    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    console.log("webrtc peer connection created", { peerId, callType, iceServerCount: ICE_SERVERS.length });
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
+        console.log("webrtc ice candidate sent", event.candidate.candidate);
         socketRef.current?.emit("ice-candidate", {
           to: peerId,
-          candidate: event.candidate,
-          callType: callRef.current?.type || "voice"
+          candidate: event.candidate.toJSON(),
+          callType: callRef.current?.type || callType
         });
       }
     };
 
     pc.ontrack = (event) => {
-      event.streams[0].getTracks().forEach((track) => remoteStreamRef.current.addTrack(track));
+      const [stream] = event.streams;
+      console.log("webrtc remote track received", event.track.kind, stream?.id);
+      if (stream) {
+        remoteStreamRef.current = stream;
+        setRemoteStream(stream);
+      } else {
+        remoteStreamRef.current.addTrack(event.track);
+        setRemoteStream(remoteStreamRef.current);
+      }
       if (remoteVideoRef.current) {
         remoteVideoRef.current.srcObject = remoteStreamRef.current;
+        remoteVideoRef.current.play?.().catch(() => {});
       }
     };
 
-    localStreamRef.current?.getTracks().forEach((track) => pc.addTrack(track, localStreamRef.current));
+    pc.oniceconnectionstatechange = () => {
+      console.log("webrtc ice connection state", pc.iceConnectionState);
+    };
+    pc.onconnectionstatechange = () => {
+      console.log("webrtc connection state", pc.connectionState);
+    };
+    pc.onsignalingstatechange = () => {
+      console.log("webrtc signaling state", pc.signalingState);
+    };
+
+    localStreamRef.current?.getTracks().forEach((track) => {
+      pc.addTrack(track, localStreamRef.current);
+      console.log("webrtc local track added", track.kind, track.readyState);
+    });
+    if (!localStreamRef.current?.getVideoTracks().length) {
+      pc.addTransceiver("video", { direction: "sendrecv" });
+      console.log("webrtc video transceiver added for future screen/camera track");
+    }
     pcRef.current = pc;
     return pc;
   }
@@ -1179,7 +1269,7 @@ export default function App() {
 
     try {
       await prepareLocalMedia(type);
-      createPeerConnection(selectedUser.id);
+      createPeerConnection(selectedUser.id, type);
       setCall({ peer: selectedUser, type, status: "ringing", isCaller: true });
       callStartedAtRef.current = Date.now();
       console.log("call type sent", type);
@@ -1195,7 +1285,7 @@ export default function App() {
 
     try {
       await prepareLocalMedia(incomingCall.callType, { receivingScreen: incomingCall.callType === "screen" });
-      createPeerConnection(incomingCall.from);
+      createPeerConnection(incomingCall.from, incomingCall.callType);
       setCall({
         peer: incomingCall.fromUser,
         type: incomingCall.callType,
@@ -1228,13 +1318,35 @@ export default function App() {
     setIncomingCall(null);
   }
 
-  function replaceOutgoingVideoTrack(track) {
-    const sender = pcRef.current?.getSenders().find((item) => item.track?.kind === "video");
+  async function replaceOutgoingVideoTrack(track) {
+    const videoTransceiver = pcRef.current?.getTransceivers().find((item) => item.sender?.track?.kind === "video" || item.receiver?.track?.kind === "video");
+    const sender = videoTransceiver?.sender || pcRef.current?.getSenders().find((item) => item.track?.kind === "video");
     if (sender) {
-      sender.replaceTrack(track);
+      await sender.replaceTrack(track || null);
+      console.log("webrtc screen track replaced", track?.kind || "none");
     } else if (track && pcRef.current && localStreamRef.current) {
       pcRef.current.addTrack(track, localStreamRef.current);
+      console.log("webrtc screen track added", track.kind);
     }
+  }
+
+  async function restoreCameraAfterScreenShare() {
+    const currentAudioTracks = localStreamRef.current?.getAudioTracks() || [];
+    const cameraStream =
+      cameraStreamRef.current ||
+      (callRef.current?.type === "voice"
+        ? null
+        : await navigator.mediaDevices.getUserMedia({ audio: false, video: CAMERA_VIDEO_CONSTRAINTS }));
+    localStreamRef.current?.getVideoTracks().forEach((track) => {
+      if (!cameraStream?.getVideoTracks().includes(track)) track.stop();
+    });
+    const cameraTrack = cameraStream?.getVideoTracks()[0] || null;
+    await replaceOutgoingVideoTrack(cameraTrack);
+    localStreamRef.current = new MediaStream([...(cameraTrack ? [cameraTrack] : []), ...currentAudioTracks]);
+    if (cameraStream) cameraStreamRef.current = cameraStream;
+    if (localVideoRef.current) localVideoRef.current.srcObject = localStreamRef.current;
+    setScreenSharing(false);
+    console.log("webrtc screen share restored camera track");
   }
 
   function toggleMute() {
@@ -1253,47 +1365,34 @@ export default function App() {
 
   async function toggleScreenShare() {
     if (screenSharing) {
-      const cameraStream =
-        cameraStreamRef.current || (await navigator.mediaDevices.getUserMedia({ video: call?.type !== "voice", audio: true }));
-      localStreamRef.current?.getVideoTracks().forEach((track) => {
-        if (!cameraStream.getVideoTracks().includes(track)) track.stop();
-      });
-      localStreamRef.current = cameraStream;
-      cameraStreamRef.current = cameraStream;
-      replaceOutgoingVideoTrack(cameraStream.getVideoTracks()[0]);
-      if (localVideoRef.current) localVideoRef.current.srcObject = cameraStream;
-      setScreenSharing(false);
+      await restoreCameraAfterScreenShare();
       return;
     }
 
-    const displayStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    const displayStream = await navigator.mediaDevices.getDisplayMedia({
+      video: SCREEN_SHARE_VIDEO_CONSTRAINTS,
+      audio: false
+    });
     const screenTrack = displayStream.getVideoTracks()[0];
-    replaceOutgoingVideoTrack(screenTrack);
-    localStreamRef.current = displayStream;
+    await replaceOutgoingVideoTrack(screenTrack);
+    const audioTracks = localStreamRef.current?.getAudioTracks() || [];
+    localStreamRef.current = new MediaStream([screenTrack, ...audioTracks]);
     if (localVideoRef.current) localVideoRef.current.srcObject = displayStream;
     screenTrack.onended = () => {
       if (stoppingCallRef.current) return;
-      if (callRef.current?.type === "screen") {
-        endCall();
-      } else {
-        setScreenSharing(false);
-      }
+      restoreCameraAfterScreenShare().catch(console.error);
     };
     setScreenSharing(true);
   }
 
   function stopScreenShare() {
-    if (call?.type === "screen") {
-      endCall();
-      return;
-    }
-
     toggleScreenShare();
   }
 
   function endCallLocally() {
     pcRef.current?.close();
     pcRef.current = null;
+    pendingIceCandidatesRef.current = [];
     stoppingCallRef.current = true;
     localStreamRef.current?.getTracks().forEach((track) => track.stop());
     cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
@@ -1302,6 +1401,7 @@ export default function App() {
     localStreamRef.current = null;
     cameraStreamRef.current = null;
     remoteStreamRef.current = new MediaStream();
+    setRemoteStream(null);
     callStartedAtRef.current = null;
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
