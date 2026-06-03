@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  ArrowLeft,
   Check,
   CheckCheck,
   Copy,
@@ -111,7 +112,8 @@ export default function ChatWindow({
   onReplyToMessage,
   onCancelReply,
   onForwardMessage,
-  onStartCall
+  onStartCall,
+  onBack
 }) {
   const [recording, setRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
@@ -348,6 +350,9 @@ export default function ChatWindow({
     <section className="chat-window">
       <header className="chat-header">
         <div className="chat-peer">
+          <button className="mobile-chat-back" title="Back to chats" type="button" onClick={onBack}>
+            <ArrowLeft size={22} />
+          </button>
           {avatarFor(selectedUser, apiUrl)}
           <div>
             <h2>{selectedUser.name}</h2>

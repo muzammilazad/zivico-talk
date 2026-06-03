@@ -1412,7 +1412,7 @@ export default function App() {
   }
 
   return (
-    <main className="app-shell premium-shell">
+    <main className={`app-shell premium-shell view-${activeView} ${selectedUser && activeView === "chats" ? "mobile-chat-open" : ""}`}>
       <header className="topbar">
         <input
           ref={avatarInputRef}
@@ -1518,6 +1518,7 @@ export default function App() {
             onCancelReply={() => setReplyToMessage(null)}
             onForwardMessage={forwardMessage}
             onStartCall={startCall}
+            onBack={() => setSelectedUser(null)}
             apiUrl={API_BASE_URL}
           />
         )}
@@ -1617,6 +1618,36 @@ export default function App() {
           </aside>
         )}
       </div>
+      <nav className="mobile-bottom-nav" aria-label="Mobile navigation">
+        <button
+          className={activeView === "chats" ? "active" : ""}
+          type="button"
+          onClick={() => {
+            setActiveView("chats");
+            setSelectedUser(null);
+          }}
+        >
+          <MessageSquare size={20} />
+          <span>Chats</span>
+        </button>
+        <button type="button" onClick={() => setShowAddContact(true)}>
+          <Users size={20} />
+          <span>Contacts</span>
+        </button>
+        <button type="button" onClick={() => setShowRequests(true)}>
+          <Bell size={20} />
+          <span>Requests</span>
+          {contactRequests.length > 0 && <span className="mobile-nav-badge">{contactRequests.length}</span>}
+        </button>
+        <button className={activeView === "profile" ? "active" : ""} type="button" onClick={() => setActiveView("profile")}>
+          <UserCircle size={20} />
+          <span>Profile</span>
+        </button>
+        <button type="button" onClick={logout}>
+          <LogOut size={20} />
+          <span>Logout</span>
+        </button>
+      </nav>
       {toast && <div className="toast">{toast}</div>}
 
       <VideoCallModal
