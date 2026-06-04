@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Capacitor } from "@capacitor/core";
 import {
   Bell,
   BellRing,
@@ -41,6 +42,11 @@ const INCOMING_RINGTONE_PATH = "/sounds/incoming-ringtone.wav";
 const OUTGOING_RINGBACK_PATH = "/sounds/outgoing-ringback.wav";
 const CALL_AUDIO_UNLOCKED_KEY = "zivico-call-audio-unlocked";
 const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY || "";
+const SCREEN_SHARE_UNSUPPORTED_MESSAGE = "Screen sharing is not supported on this mobile app yet.";
+
+function isAndroidApp() {
+  return Capacitor.getPlatform?.() === "android";
+}
 
 function urlBase64ToUint8Array(base64String) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -928,10 +934,12 @@ export default function App() {
       const offer = await pcRef.current.createOffer();
       await pcRef.current.setLocalDescription(offer);
       console.log("webrtc signaling state after local offer", pcRef.current.signalingState);
+      console.log("webrtc offer sent", { to: from, callType });
       socket.emit("offer", { to: from, offer, callType });
     }
 
     async function handleOffer({ from, offer, callType }) {
+      console.log("webrtc offer received", { from, callType });
       let activeCall = callRef.current;
       if (!pcRef.current) {
         const fromUser = contacts.find((user) => String(user.id) === String(from)) || { id: from, name: "Caller", email: "" };
@@ -947,10 +955,12 @@ export default function App() {
       const answer = await pcRef.current.createAnswer();
       await pcRef.current.setLocalDescription(answer);
       console.log("webrtc signaling state after local answer", pcRef.current.signalingState);
+      console.log("webrtc answer sent", { to: from, callType });
       socket.emit("answer", { to: from, answer, callType });
     }
 
-    async function handleAnswer({ answer }) {
+    async function handleAnswer({ from, answer, callType }) {
+      console.log("webrtc answer received", { from, callType });
       if (pcRef.current) {
         await pcRef.current.setRemoteDescription(new RTCSessionDescription(answer));
         console.log("webrtc remote answer set", pcRef.current.signalingState);
@@ -1443,28 +1453,65 @@ export default function App() {
   }
 
   async function getCallStream(type, options = {}) {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error("Camera and microphone are not available in this WebView.");
+    }
+
+    async function requestUserMedia(constraints, label) {
+      try {
+        if (isAndroidApp()) {
+          console.log("webrtc Android camera/microphone permission request", { label, constraints });
+        }
+        console.log("Requesting camera/microphone permission", { label, constraints });
+        console.log("webrtc getUserMedia requested", { label, constraints });
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        console.log("getUserMedia success", label);
+        console.log(
+          "webrtc getUserMedia success",
+          label,
+          stream.getTracks().map((track) => `${track.kind}:${track.readyState}`)
+        );
+        return stream;
+      } catch (err) {
+        console.error("getUserMedia failed", label, err);
+        console.error("webrtc getUserMedia failure", label, err);
+        if (err?.name === "NotAllowedError" || err?.name === "PermissionDeniedError") {
+          throw new Error("Camera or microphone permission was denied. Please allow Camera and Microphone permissions in Android app settings and try again.");
+        }
+        if (err?.name === "NotFoundError" || err?.name === "DevicesNotFoundError") {
+          throw new Error("Camera or microphone was not found on this device.");
+        }
+        throw err;
+      }
+    }
+
     if (type === "screen" && options.receivingScreen) {
       console.log("webrtc requesting receiver mic permission for screen call");
-      return navigator.mediaDevices.getUserMedia({ audio: true, video: false }).catch(() => new MediaStream());
+      return requestUserMedia({ audio: true, video: false }, "screen receiver microphone").catch(() => new MediaStream());
     }
 
     if (type === "screen") {
+      if (!navigator.mediaDevices.getDisplayMedia) {
+        console.warn("webrtc getDisplayMedia unsupported");
+        throw new Error(SCREEN_SHARE_UNSUPPORTED_MESSAGE);
+      }
       console.log("webrtc requesting display media");
       const displayStream = await navigator.mediaDevices.getDisplayMedia({
         video: SCREEN_SHARE_VIDEO_CONSTRAINTS,
         audio: false
       });
-      const micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false }).catch(() => null);
+      const micStream = await requestUserMedia({ audio: true, video: false }, "screen share microphone").catch(() => null);
       const tracks = [...displayStream.getVideoTracks()];
       if (micStream) tracks.push(...micStream.getAudioTracks());
       return new MediaStream(tracks);
     }
 
-    console.log("webrtc requesting camera/mic permission", type);
-    return navigator.mediaDevices.getUserMedia({
+    const constraints = {
       audio: true,
-      video: type === "video" ? CAMERA_VIDEO_CONSTRAINTS : false
-    });
+      video: type === "video"
+    };
+    console.log("webrtc requesting camera/mic permission", { type, constraints });
+    return requestUserMedia(constraints, type === "video" ? "video call" : "audio call");
   }
 
   async function prepareLocalMedia(type, options = {}) {
@@ -1528,12 +1575,18 @@ export default function App() {
       remoteVideoRef.current.srcObject = remoteStreamRef.current;
     }
 
+    console.log("webrtc Creating RTCPeerConnection", {
+      peerId,
+      callType,
+      iceServers: ICE_SERVERS.map((server) => server.urls)
+    });
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     console.log("webrtc peer connection created", { peerId, callType, iceServerCount: ICE_SERVERS.length });
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        console.log("webrtc ice candidate sent", event.candidate.candidate);
+        console.log("webrtc ICE candidate generated", event.candidate.candidate);
+        console.log("webrtc ice candidate sent", { to: peerId, callType: callRef.current?.type || callType });
         socketRef.current?.emit("ice-candidate", {
           to: peerId,
           candidate: event.candidate.toJSON(),
@@ -1559,10 +1612,10 @@ export default function App() {
     };
 
     pc.oniceconnectionstatechange = () => {
-      console.log("webrtc ice connection state", pc.iceConnectionState);
+      console.log("webrtc ICE connection state change", pc.iceConnectionState);
     };
     pc.onconnectionstatechange = () => {
-      console.log("webrtc connection state", pc.connectionState);
+      console.log("webrtc WebRTC connection state change", pc.connectionState);
       if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
         stopIncomingRingtone();
         stopOutgoingRingback();
@@ -1658,11 +1711,22 @@ export default function App() {
 
   async function restoreCameraAfterScreenShare() {
     const currentAudioTracks = localStreamRef.current?.getAudioTracks() || [];
-    const cameraStream =
-      cameraStreamRef.current ||
-      (callRef.current?.type === "voice"
-        ? null
-        : await navigator.mediaDevices.getUserMedia({ audio: false, video: CAMERA_VIDEO_CONSTRAINTS }));
+    let cameraStream = cameraStreamRef.current || null;
+    if (!cameraStream && callRef.current?.type !== "voice") {
+      const constraints = { audio: false, video: CAMERA_VIDEO_CONSTRAINTS };
+      try {
+        console.log("webrtc getUserMedia requested", { label: "restore camera after screen share", constraints });
+        cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+        console.log(
+          "webrtc getUserMedia success",
+          "restore camera after screen share",
+          cameraStream.getTracks().map((track) => `${track.kind}:${track.readyState}`)
+        );
+      } catch (err) {
+        console.error("webrtc getUserMedia failure", "restore camera after screen share", err);
+        throw err;
+      }
+    }
     localStreamRef.current?.getVideoTracks().forEach((track) => {
       if (!cameraStream?.getVideoTracks().includes(track)) track.stop();
     });
@@ -1695,24 +1759,35 @@ export default function App() {
       return;
     }
 
-    const displayStream = await navigator.mediaDevices.getDisplayMedia({
-      video: SCREEN_SHARE_VIDEO_CONSTRAINTS,
-      audio: false
-    });
-    const screenTrack = displayStream.getVideoTracks()[0];
-    await replaceOutgoingVideoTrack(screenTrack);
-    const audioTracks = localStreamRef.current?.getAudioTracks() || [];
-    localStreamRef.current = new MediaStream([screenTrack, ...audioTracks]);
-    if (localVideoRef.current) localVideoRef.current.srcObject = displayStream;
-    screenTrack.onended = () => {
-      if (stoppingCallRef.current) return;
-      restoreCameraAfterScreenShare().catch(console.error);
-    };
-    setScreenSharing(true);
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      console.warn("webrtc getDisplayMedia unsupported");
+      alert(SCREEN_SHARE_UNSUPPORTED_MESSAGE);
+      return;
+    }
+
+    try {
+      const displayStream = await navigator.mediaDevices.getDisplayMedia({
+        video: SCREEN_SHARE_VIDEO_CONSTRAINTS,
+        audio: false
+      });
+      const screenTrack = displayStream.getVideoTracks()[0];
+      await replaceOutgoingVideoTrack(screenTrack);
+      const audioTracks = localStreamRef.current?.getAudioTracks() || [];
+      localStreamRef.current = new MediaStream([screenTrack, ...audioTracks]);
+      if (localVideoRef.current) localVideoRef.current.srcObject = displayStream;
+      screenTrack.onended = () => {
+        if (stoppingCallRef.current) return;
+        restoreCameraAfterScreenShare().catch(console.error);
+      };
+      setScreenSharing(true);
+    } catch (err) {
+      console.error("webrtc screen share failure", err);
+      alert(err.message || "Could not start screen sharing");
+    }
   }
 
-  function stopScreenShare() {
-    toggleScreenShare();
+  async function stopScreenShare() {
+    await toggleScreenShare();
   }
 
   function endCallLocally() {

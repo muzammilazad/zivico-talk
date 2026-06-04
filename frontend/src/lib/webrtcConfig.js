@@ -1,16 +1,17 @@
-export const ICE_SERVERS = [
-  { urls: "stun:stun.l.google.com:19302" },
-  { urls: "stun:global.stun.twilio.com:3478" }
-];
+const turnUrl = import.meta.env.VITE_TURN_URL || "";
+const turnUsername = import.meta.env.VITE_TURN_USERNAME || "";
+const turnCredential = import.meta.env.VITE_TURN_CREDENTIAL || "";
 
-if (
-  import.meta.env.VITE_TURN_URL &&
-  import.meta.env.VITE_TURN_USERNAME &&
-  import.meta.env.VITE_TURN_CREDENTIAL
-) {
+console.log("webrtc TURN URL loaded", turnUrl || "not configured");
+
+export const ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
+
+if (turnUrl && turnUsername && turnCredential) {
   ICE_SERVERS.push({
-    urls: import.meta.env.VITE_TURN_URL,
-    username: import.meta.env.VITE_TURN_USERNAME,
-    credential: import.meta.env.VITE_TURN_CREDENTIAL
+    urls: turnUrl,
+    username: turnUsername,
+    credential: turnCredential
   });
+} else {
+  console.warn("webrtc TURN credentials incomplete; cross-network calls may fail");
 }
