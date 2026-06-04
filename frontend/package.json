@@ -9,12 +9,14 @@
     "preview": "vite preview --configLoader runner"
   },
   "dependencies": {
+    "@capacitor/android": "^8.4.0",
+    "@capacitor/cli": "^8.4.0",
+    "@capacitor/core": "^8.4.0",
     "@vitejs/plugin-react": "^4.3.4",
-    "vite": "^6.0.7",
+    "lucide-react": "^0.468.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "socket.io-client": "^4.8.1",
-    "lucide-react": "^0.468.0"
-  },
-  "devDependencies": {}
+    "vite": "^6.0.7"
+  }
 }

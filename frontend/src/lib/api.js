@@ -1,6 +1,8 @@
-import { API_BASE_URL } from "./config";
+import { API_BASE_URL, assertApiBaseUrl } from "./config";
 
 export async function api(path, options = {}, token) {
+  assertApiBaseUrl();
+
   const isFormData = options.body instanceof FormData;
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
