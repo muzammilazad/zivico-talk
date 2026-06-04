@@ -23,7 +23,7 @@ import VideoCallModal from "./components/VideoCallModal";
 import { api } from "./lib/api";
 import { API_BASE_URL } from "./lib/config";
 import { createSocket } from "./lib/socket";
-import { ICE_SERVERS } from "./lib/webrtcConfig";
+import { ICE_CONFIG, ICE_SERVERS } from "./lib/webrtcConfig";
 
 const emptySession = { token: "", user: null };
 // Camera video is limited to 720p / 24fps for mobile stability and lower TURN usage.
@@ -451,6 +451,7 @@ export default function App() {
   const pendingIceCandidatesRef = useRef([]);
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
+  const remoteAudioRef = useRef(null);
   const incomingRingtoneRef = useRef(null);
   const outgoingRingbackRef = useRef(null);
   const audioUnlockedRef = useRef(audioUnlocked);
@@ -534,7 +535,11 @@ export default function App() {
   async function unlockCallAudio() {
     const incomingAudio = getIncomingRingtone();
     const outgoingAudio = getOutgoingRingback();
-    const audioItems = [incomingAudio, outgoingAudio];
+    const audioItems = [
+      incomingAudio,
+      outgoingAudio,
+      remoteAudioRef.current?.srcObject ? remoteAudioRef.current : null
+    ].filter(Boolean);
     const previousSettings = audioItems.map((audio) => ({
       audio,
       muted: audio.muted,
@@ -935,11 +940,11 @@ export default function App() {
       await pcRef.current.setLocalDescription(offer);
       console.log("webrtc signaling state after local offer", pcRef.current.signalingState);
       console.log("webrtc offer sent", { to: from, callType });
-      socket.emit("offer", { to: from, offer, callType });
+      socket.emit("offer", { to: from, callerId: currentUser.id, receiverId: from, offer, callType });
     }
 
-    async function handleOffer({ from, offer, callType }) {
-      console.log("webrtc offer received", { from, callType });
+    async function handleOffer({ from, callerId, receiverId, offer, callType }) {
+      console.log("webrtc offer received", { from, callerId, receiverId, callType });
       let activeCall = callRef.current;
       if (!pcRef.current) {
         const fromUser = contacts.find((user) => String(user.id) === String(from)) || { id: from, name: "Caller", email: "" };
@@ -956,11 +961,11 @@ export default function App() {
       await pcRef.current.setLocalDescription(answer);
       console.log("webrtc signaling state after local answer", pcRef.current.signalingState);
       console.log("webrtc answer sent", { to: from, callType });
-      socket.emit("answer", { to: from, answer, callType });
+      socket.emit("answer", { to: from, callerId: from, receiverId: currentUser.id, answer, callType });
     }
 
-    async function handleAnswer({ from, answer, callType }) {
-      console.log("webrtc answer received", { from, callType });
+    async function handleAnswer({ from, callerId, receiverId, answer, callType }) {
+      console.log("webrtc answer received", { from, callerId, receiverId, callType });
       if (pcRef.current) {
         await pcRef.current.setRemoteDescription(new RTCSessionDescription(answer));
         console.log("webrtc remote answer set", pcRef.current.signalingState);
@@ -968,7 +973,8 @@ export default function App() {
       }
     }
 
-    async function handleIceCandidate({ candidate }) {
+    async function handleIceCandidate({ from, callerId, receiverId, candidate, callType }) {
+      console.log("Received ICE candidate", { from, callerId, receiverId, callType });
       console.log("webrtc ice candidate received", candidate?.candidate || candidate?.type || "candidate");
       await addOrQueueIceCandidate(candidate);
     }
@@ -983,6 +989,12 @@ export default function App() {
           receiverId: currentUser.id
         });
       }
+      endCallLocally();
+    }
+
+    function handleCallRejected({ from }) {
+      const activeCall = callRef.current;
+      if (!activeCall || String(activeCall.peer.id) !== String(from)) return;
       endCallLocally();
     }
 
@@ -1007,6 +1019,7 @@ export default function App() {
     socket.on("offer", handleOffer);
     socket.on("answer", handleAnswer);
     socket.on("ice-candidate", handleIceCandidate);
+    socket.on("call-rejected", handleCallRejected);
     socket.on("end-call", handleEndCall);
 
     return () => {
@@ -1033,6 +1046,7 @@ export default function App() {
       socket.off("offer", handleOffer);
       socket.off("answer", handleAnswer);
       socket.off("ice-candidate", handleIceCandidate);
+      socket.off("call-rejected", handleCallRejected);
       socket.off("end-call", handleEndCall);
       socket.disconnect();
       endCallLocally();
@@ -1466,6 +1480,9 @@ export default function App() {
         console.log("webrtc getUserMedia requested", { label, constraints });
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         console.log("getUserMedia success", label);
+        if (label === "audio call") {
+          console.log("Audio call getUserMedia success");
+        }
         console.log(
           "webrtc getUserMedia success",
           label,
@@ -1474,6 +1491,9 @@ export default function App() {
         return stream;
       } catch (err) {
         console.error("getUserMedia failed", label, err);
+        if (label === "audio call") {
+          console.error("Audio call getUserMedia failed", err);
+        }
         console.error("webrtc getUserMedia failure", label, err);
         if (err?.name === "NotAllowedError" || err?.name === "PermissionDeniedError") {
           throw new Error("Camera or microphone permission was denied. Please allow Camera and Microphone permissions in Android app settings and try again.");
@@ -1510,6 +1530,9 @@ export default function App() {
       audio: true,
       video: type === "video"
     };
+    if (type === "voice") {
+      console.log("Requesting audio call media");
+    }
     console.log("webrtc requesting camera/mic permission", { type, constraints });
     return requestUserMedia(constraints, type === "video" ? "video call" : "audio call");
   }
@@ -1541,16 +1564,80 @@ export default function App() {
     return stream;
   }
 
+  function attachRemoteStream() {
+    const stream = remoteStreamRef.current;
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = stream;
+      remoteVideoRef.current.muted = true;
+      remoteVideoRef.current.play?.().catch((err) => {
+        console.warn("webrtc remote video autoplay blocked", err);
+      });
+    }
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.srcObject = stream;
+      remoteAudioRef.current.muted = false;
+      remoteAudioRef.current.play?.().catch((err) => {
+        console.warn("webrtc remote audio autoplay blocked; user gesture required", err);
+        setAudioUnlocked(false);
+        audioUnlockedRef.current = false;
+      });
+    }
+    setRemoteStream(stream);
+    console.log(
+      "Remote stream attached",
+      stream.getTracks().map((track) => `${track.kind}:${track.readyState}`)
+    );
+  }
+
+  async function logSelectedIceCandidatePair(pc) {
+    if (!pc?.getStats) return;
+    try {
+      const stats = await pc.getStats();
+      let selectedPair = null;
+      stats.forEach((report) => {
+        if (report.type === "candidate-pair" && (report.selected || report.nominated) && report.state === "succeeded") {
+          selectedPair = report;
+        }
+      });
+      if (!selectedPair) return;
+
+      const localCandidate = stats.get(selectedPair.localCandidateId);
+      const remoteCandidate = stats.get(selectedPair.remoteCandidateId);
+      console.log("webrtc selected ICE candidate pair", {
+        local: localCandidate
+          ? {
+              type: localCandidate.candidateType,
+              protocol: localCandidate.protocol,
+              address: localCandidate.address || localCandidate.ip,
+              port: localCandidate.port
+            }
+          : null,
+        remote: remoteCandidate
+          ? {
+              type: remoteCandidate.candidateType,
+              protocol: remoteCandidate.protocol,
+              address: remoteCandidate.address || remoteCandidate.ip,
+              port: remoteCandidate.port
+            }
+          : null
+      });
+    } catch (err) {
+      console.warn("webrtc selected ICE candidate pair unavailable", err);
+    }
+  }
+
   async function addOrQueueIceCandidate(candidate) {
     if (!candidate || !pcRef.current) return;
 
     if (!pcRef.current.remoteDescription) {
       pendingIceCandidatesRef.current.push(candidate);
+      console.log("Queued ICE candidate", pendingIceCandidatesRef.current.length);
       console.log("webrtc ice candidate queued", pendingIceCandidatesRef.current.length);
       return;
     }
 
     await pcRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+    console.log("Added ICE candidate");
     console.log("webrtc ice candidate added");
   }
 
@@ -1561,6 +1648,7 @@ export default function App() {
     pendingIceCandidatesRef.current = [];
     for (const candidate of candidates) {
       await pcRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+      console.log("Added ICE candidate");
       console.log("webrtc queued ice candidate added");
     }
   }
@@ -1574,21 +1662,28 @@ export default function App() {
     if (remoteVideoRef.current) {
       remoteVideoRef.current.srcObject = remoteStreamRef.current;
     }
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.srcObject = remoteStreamRef.current;
+      remoteAudioRef.current.muted = false;
+    }
 
     console.log("webrtc Creating RTCPeerConnection", {
       peerId,
       callType,
       iceServers: ICE_SERVERS.map((server) => server.urls)
     });
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    const pc = new RTCPeerConnection(ICE_CONFIG);
     console.log("webrtc peer connection created", { peerId, callType, iceServerCount: ICE_SERVERS.length });
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
         console.log("webrtc ICE candidate generated", event.candidate.candidate);
+        console.log("Sending ICE candidate", { to: peerId, callType: callRef.current?.type || callType });
         console.log("webrtc ice candidate sent", { to: peerId, callType: callRef.current?.type || callType });
         socketRef.current?.emit("ice-candidate", {
           to: peerId,
+          callerId: currentUser.id,
+          receiverId: peerId,
           candidate: event.candidate.toJSON(),
           callType: callRef.current?.type || callType
         });
@@ -1596,27 +1691,48 @@ export default function App() {
     };
 
     pc.ontrack = (event) => {
-      const [stream] = event.streams;
-      console.log("webrtc remote track received", event.track.kind, stream?.id);
-      if (stream) {
-        remoteStreamRef.current = stream;
-        setRemoteStream(stream);
-      } else {
+      console.log("Remote track received", event.track.kind);
+      console.log("webrtc remote track received", event.track.kind, event.streams?.[0]?.id);
+      if (event.track.kind === "audio") {
+        console.log("Remote audio track received");
+      }
+      if (!remoteStreamRef.current.getTracks().some((track) => track.id === event.track.id)) {
         remoteStreamRef.current.addTrack(event.track);
-        setRemoteStream(remoteStreamRef.current);
       }
-      if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = remoteStreamRef.current;
-        remoteVideoRef.current.play?.().catch(() => {});
-      }
+      console.log(
+        "webrtc remote stream tracks",
+        remoteStreamRef.current.getTracks().map((track) => `${track.kind}:${track.readyState}`)
+      );
+      attachRemoteStream();
     };
 
+    pc.onicegatheringstatechange = () => {
+      console.log("webrtc ICE gathering state change", pc.iceGatheringState);
+    };
     pc.oniceconnectionstatechange = () => {
       console.log("webrtc ICE connection state change", pc.iceConnectionState);
+      if (["connected", "completed"].includes(pc.iceConnectionState)) {
+        logSelectedIceCandidatePair(pc);
+      }
+      if (["failed", "disconnected", "closed"].includes(pc.iceConnectionState)) {
+        console.warn("webrtc ICE connection state warning", pc.iceConnectionState);
+        if (!stoppingCallRef.current) {
+          setToast("Call connection failed. TURN server may be required.");
+          setTimeout(() => setToast(""), 4000);
+        }
+      }
     };
     pc.onconnectionstatechange = () => {
       console.log("webrtc WebRTC connection state change", pc.connectionState);
+      if (["connected"].includes(pc.connectionState)) {
+        logSelectedIceCandidatePair(pc);
+      }
       if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
+        console.warn("webrtc connection state warning", pc.connectionState);
+        if (!stoppingCallRef.current) {
+          setToast("Call connection failed. TURN server may be required.");
+          setTimeout(() => setToast(""), 4000);
+        }
         stopIncomingRingtone();
         stopOutgoingRingback();
       }
@@ -1650,7 +1766,12 @@ export default function App() {
       setCall({ peer: selectedUser, type, status: "ringing", isCaller: true });
       callStartedAtRef.current = Date.now();
       console.log("call type sent", type);
-      socketRef.current.emit("call-user", { to: selectedUser.id, callType: type });
+      socketRef.current.emit("call-user", {
+        to: selectedUser.id,
+        callerId: currentUser.id,
+        receiverId: selectedUser.id,
+        callType: type
+      });
     } catch (err) {
       alert(err.message || "Could not start call");
       endCallLocally();
@@ -1671,7 +1792,12 @@ export default function App() {
         isCaller: false
       });
       callStartedAtRef.current = Date.now();
-      socketRef.current.emit("call-accepted", { to: incomingCall.from, callType: incomingCall.callType });
+      socketRef.current.emit("call-accepted", {
+        to: incomingCall.from,
+        callerId: incomingCall.from,
+        receiverId: currentUser.id,
+        callType: incomingCall.callType
+      });
       setIncomingCall(null);
     } catch (err) {
       alert(err.message || "Could not accept call");
@@ -1690,8 +1816,16 @@ export default function App() {
       });
       socketRef.current.emit("end-call", {
         to: incomingCall.from,
+        callerId: incomingCall.from,
+        receiverId: currentUser.id,
         callType: incomingCall.callType || "voice",
         callStatus: "declined"
+      });
+      socketRef.current.emit("call-rejected", {
+        to: incomingCall.from,
+        callerId: incomingCall.from,
+        receiverId: currentUser.id,
+        callType: incomingCall.callType || "voice"
       });
     }
     setIncomingCall(null);
@@ -1793,10 +1927,10 @@ export default function App() {
   function endCallLocally() {
     stopIncomingRingtone();
     stopOutgoingRingback();
+    stoppingCallRef.current = true;
     pcRef.current?.close();
     pcRef.current = null;
     pendingIceCandidatesRef.current = [];
-    stoppingCallRef.current = true;
     localStreamRef.current?.getTracks().forEach((track) => track.stop());
     cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
     remoteStreamRef.current?.getTracks().forEach((track) => track.stop());
@@ -1830,6 +1964,8 @@ export default function App() {
       }
       socketRef.current?.emit("end-call", {
         to: peerId,
+        callerId: call?.isCaller ? currentUser.id : peerId,
+        receiverId: call?.isCaller ? peerId : currentUser.id,
         callType: call?.type || incomingCall?.callType || "voice",
         callStatus
       });
@@ -2160,6 +2296,18 @@ export default function App() {
         </button>
       </nav>
       {toast && <div className="toast">{toast}</div>}
+      <audio
+        ref={remoteAudioRef}
+        autoPlay
+        playsInline
+        controls={false}
+        muted={false}
+        onCanPlay={() => remoteAudioRef.current?.play?.().catch((err) => {
+          console.warn("webrtc remote audio play blocked until user gesture", err);
+          setAudioUnlocked(false);
+          audioUnlockedRef.current = false;
+        })}
+      />
 
       <VideoCallModal
         call={call}

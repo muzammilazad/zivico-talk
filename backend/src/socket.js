@@ -96,7 +96,7 @@ export function setupSocket(io) {
     socket.on("private-message", handleMessage);
     socket.on("send-message", handleMessage);
 
-    socket.on("call-user", ({ to, callType, fromOffer }) => {
+    socket.on("call-user", ({ to, callerId, receiverId, callType, fromOffer }) => {
       const type = callType || "voice";
       console.log("call type sent", type);
       // For a production WhatsApp-like experience, this is also where the
@@ -106,6 +106,8 @@ export function setupSocket(io) {
       // native Android/iOS push plus call-notification APIs.
       io.to(to).emit("call-user", {
         from: user.id,
+        callerId: callerId || user.id,
+        receiverId: receiverId || to,
         fromUser: { id: user.id, name: user.name, email: user.email },
         callType: type,
         fromOffer
@@ -141,28 +143,63 @@ export function setupSocket(io) {
       io.to(String(to)).emit("typing", { from: user.id, name: user.name, isTyping: Boolean(isTyping) });
     });
 
-    socket.on("call-accepted", ({ to, callType }) => {
+    socket.on("call-accepted", ({ to, callerId, receiverId, callType }) => {
       io.to(to).emit("call-accepted", {
         from: user.id,
+        callerId: callerId || to,
+        receiverId: receiverId || user.id,
         fromUser: { id: user.id, name: user.name, email: user.email },
         callType: callType || "voice"
       });
     });
 
-    socket.on("offer", ({ to, offer, callType }) => {
-      io.to(to).emit("offer", { from: user.id, offer, callType: callType || "voice" });
+    socket.on("offer", ({ to, callerId, receiverId, offer, callType }) => {
+      io.to(to).emit("offer", {
+        from: user.id,
+        callerId: callerId || user.id,
+        receiverId: receiverId || to,
+        offer,
+        callType: callType || "voice"
+      });
     });
 
-    socket.on("answer", ({ to, answer, callType }) => {
-      io.to(to).emit("answer", { from: user.id, answer, callType: callType || "voice" });
+    socket.on("answer", ({ to, callerId, receiverId, answer, callType }) => {
+      io.to(to).emit("answer", {
+        from: user.id,
+        callerId: callerId || to,
+        receiverId: receiverId || user.id,
+        answer,
+        callType: callType || "voice"
+      });
     });
 
-    socket.on("ice-candidate", ({ to, candidate, callType }) => {
-      io.to(to).emit("ice-candidate", { from: user.id, candidate, callType: callType || "voice" });
+    socket.on("ice-candidate", ({ to, callerId, receiverId, candidate, callType }) => {
+      io.to(to).emit("ice-candidate", {
+        from: user.id,
+        callerId: callerId || user.id,
+        receiverId: receiverId || to,
+        candidate,
+        callType: callType || "voice"
+      });
     });
 
-    socket.on("end-call", ({ to, callType, callStatus }) => {
-      io.to(to).emit("end-call", { from: user.id, callType: callType || "voice", callStatus });
+    socket.on("call-rejected", ({ to, callerId, receiverId, callType }) => {
+      io.to(to).emit("call-rejected", {
+        from: user.id,
+        callerId: callerId || to,
+        receiverId: receiverId || user.id,
+        callType: callType || "voice"
+      });
+    });
+
+    socket.on("end-call", ({ to, callerId, receiverId, callType, callStatus }) => {
+      io.to(to).emit("end-call", {
+        from: user.id,
+        callerId: callerId || user.id,
+        receiverId: receiverId || to,
+        callType: callType || "voice",
+        callStatus
+      });
     });
 
     socket.on("disconnect", () => {
