@@ -36,7 +36,7 @@ export default function AuthPanel({ onAuth }) {
             <MessageCircle size={28} />
           </span>
           <div>
-            <h1>Zivico Talk</h1>
+            <h1>Zee Talk</h1>
             <p>Private chats and local WebRTC calls.</p>
           </div>
         </div>

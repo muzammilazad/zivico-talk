@@ -241,7 +241,7 @@ function DashboardView({ metrics, contacts, unreadTotal, missedCalls, todayCalls
       <div className="welcome-panel">
         <div>
           <span className="eyebrow">Welcome back</span>
-          <h1>Zivico Talk</h1>
+          <h1>Zee Talk</h1>
           <p>Client-ready communication with private chats, calls, media sharing, and operational visibility.</p>
         </div>
         <span className="hero-mark">ZT</span>
@@ -1856,7 +1856,7 @@ export default function App() {
         <div className="brand-top">
           <span className="brand-mark small">ZT</span>
           <span>
-            <strong>Zivico Talk</strong>
+            <strong>Zee Talk</strong>
             <small>{currentUser.name}</small>
           </span>
         </div>

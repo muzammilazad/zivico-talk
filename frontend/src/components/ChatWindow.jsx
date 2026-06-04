@@ -172,7 +172,7 @@ export default function ChatWindow({
   if (!selectedUser) {
     return (
       <section className="chat-empty">
-        <h2>Zivico Talk</h2>
+        <h2>Zee Talk</h2>
         <p>Select a user to start a private conversation.</p>
       </section>
     );
