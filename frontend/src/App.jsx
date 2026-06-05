@@ -21,9 +21,9 @@ import ChatWindow from "./components/ChatWindow";
 import UserList from "./components/UserList";
 import VideoCallModal from "./components/VideoCallModal";
 import { api } from "./lib/api";
-import { API_BASE_URL } from "./lib/config";
+import { API_BASE_URL, SOCKET_URL } from "./lib/config";
 import { createSocket } from "./lib/socket";
-import { ICE_CONFIG, ICE_SERVERS } from "./lib/webrtcConfig";
+import { ICE_CONFIG, ICE_SERVERS, TURN_URL } from "./lib/webrtcConfig";
 
 const emptySession = { token: "", user: null };
 // Camera video is limited to 720p / 24fps for mobile stability and lower TURN usage.
@@ -43,6 +43,7 @@ const OUTGOING_RINGBACK_PATH = "/sounds/outgoing-ringback.wav";
 const CALL_AUDIO_UNLOCKED_KEY = "zivico-call-audio-unlocked";
 const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY || "";
 const SCREEN_SHARE_UNSUPPORTED_MESSAGE = "Screen sharing is not supported on this mobile app yet.";
+const WEBRTC_DEBUG_ENABLED = import.meta.env.VITE_WEBRTC_DEBUG !== "false";
 
 function isAndroidApp() {
   return Capacitor.getPlatform?.() === "android";
@@ -432,6 +433,8 @@ export default function App() {
   const [screenSharing, setScreenSharing] = useState(false);
   const [remoteStream, setRemoteStream] = useState(null);
   const [audioUnlocked, setAudioUnlocked] = useState(false);
+  const [webrtcLogs, setWebrtcLogs] = useState([]);
+  const [showWebrtcDebug, setShowWebrtcDebug] = useState(WEBRTC_DEBUG_ENABLED);
   const [notificationPermission, setNotificationPermission] = useState(
     typeof Notification === "undefined" ? "unsupported" : Notification.permission
   );
@@ -458,6 +461,18 @@ export default function App() {
   const serviceWorkerRegistrationRef = useRef(null);
 
   const currentUser = session.user;
+
+  function addWebRtcLog(message, data) {
+    const timestamp = new Date().toLocaleTimeString();
+    const entry = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      timestamp,
+      message,
+      data
+    };
+    console.log(message, data ?? "");
+    setWebrtcLogs((current) => [...current.slice(-79), entry]);
+  }
 
   function getIncomingRingtone() {
     if (!incomingRingtoneRef.current) {
@@ -600,6 +615,14 @@ export default function App() {
   useEffect(() => {
     audioUnlockedRef.current = audioUnlocked;
   }, [audioUnlocked]);
+
+  useEffect(() => {
+    if (!WEBRTC_DEBUG_ENABLED) return;
+    addWebRtcLog("ZEE_WEBRTC_NEW_CODE_RUNNING", { platform: Capacitor.getPlatform?.() || "web" });
+    addWebRtcLog("API URL", API_BASE_URL || "(missing)");
+    addWebRtcLog("Socket URL", SOCKET_URL || "(missing)");
+    addWebRtcLog("TURN URL loaded", TURN_URL || "not configured");
+  }, []);
 
   async function registerPushSubscription(registration) {
     if (!registration?.pushManager || !session.token) return;
@@ -937,14 +960,15 @@ export default function App() {
       stopOutgoingRingback();
       setCall({ ...activeCall, status: "connected" });
       const offer = await pcRef.current.createOffer();
+      addWebRtcLog("Offer created", { callType });
       await pcRef.current.setLocalDescription(offer);
       console.log("webrtc signaling state after local offer", pcRef.current.signalingState);
-      console.log("webrtc offer sent", { to: from, callType });
+      addWebRtcLog("Offer sent", { to: from, callType });
       socket.emit("offer", { to: from, callerId: currentUser.id, receiverId: from, offer, callType });
     }
 
     async function handleOffer({ from, callerId, receiverId, offer, callType }) {
-      console.log("webrtc offer received", { from, callerId, receiverId, callType });
+      addWebRtcLog("Offer received", { from, callerId, receiverId, callType });
       let activeCall = callRef.current;
       if (!pcRef.current) {
         const fromUser = contacts.find((user) => String(user.id) === String(from)) || { id: from, name: "Caller", email: "" };
@@ -955,26 +979,30 @@ export default function App() {
       }
 
       await pcRef.current.setRemoteDescription(new RTCSessionDescription(offer));
+      addWebRtcLog("Remote description set", { type: "offer", signalingState: pcRef.current.signalingState });
       console.log("webrtc remote offer set", pcRef.current.signalingState);
       await flushPendingIceCandidates();
       const answer = await pcRef.current.createAnswer();
+      addWebRtcLog("Answer created", { callType });
       await pcRef.current.setLocalDescription(answer);
       console.log("webrtc signaling state after local answer", pcRef.current.signalingState);
-      console.log("webrtc answer sent", { to: from, callType });
+      addWebRtcLog("Answer sent", { to: from, callType });
       socket.emit("answer", { to: from, callerId: from, receiverId: currentUser.id, answer, callType });
     }
 
     async function handleAnswer({ from, callerId, receiverId, answer, callType }) {
-      console.log("webrtc answer received", { from, callerId, receiverId, callType });
+      addWebRtcLog("Answer received", { from, callerId, receiverId, callType });
       if (pcRef.current) {
         await pcRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+        addWebRtcLog("Remote description set", { type: "answer", signalingState: pcRef.current.signalingState });
         console.log("webrtc remote answer set", pcRef.current.signalingState);
         await flushPendingIceCandidates();
       }
     }
 
     async function handleIceCandidate({ from, callerId, receiverId, candidate, callType }) {
-      console.log("Received ICE candidate", { from, callerId, receiverId, callType });
+      addWebRtcLog("ICE candidate received", { from, callerId, receiverId, callType });
+      addWebRtcLog("Received ICE candidate", { from, callerId, receiverId, callType });
       console.log("webrtc ice candidate received", candidate?.candidate || candidate?.type || "candidate");
       await addOrQueueIceCandidate(candidate);
     }
@@ -1474,14 +1502,17 @@ export default function App() {
     async function requestUserMedia(constraints, label) {
       try {
         if (isAndroidApp()) {
-          console.log("webrtc Android camera/microphone permission request", { label, constraints });
+          addWebRtcLog("Requesting camera/microphone permission", { label, constraints });
         }
-        console.log("Requesting camera/microphone permission", { label, constraints });
+        addWebRtcLog("Requesting camera/microphone permission", { label, constraints });
         console.log("webrtc getUserMedia requested", { label, constraints });
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
-        console.log("getUserMedia success", label);
+        addWebRtcLog("getUserMedia success", {
+          label,
+          tracks: stream.getTracks().map((track) => `${track.kind}:${track.readyState}`)
+        });
         if (label === "audio call") {
-          console.log("Audio call getUserMedia success");
+          addWebRtcLog("Audio call getUserMedia success");
         }
         console.log(
           "webrtc getUserMedia success",
@@ -1490,9 +1521,9 @@ export default function App() {
         );
         return stream;
       } catch (err) {
-        console.error("getUserMedia failed", label, err);
+        addWebRtcLog("getUserMedia failed", { label, name: err?.name, message: err?.message });
         if (label === "audio call") {
-          console.error("Audio call getUserMedia failed", err);
+          addWebRtcLog("Audio call getUserMedia failed", { name: err?.name, message: err?.message });
         }
         console.error("webrtc getUserMedia failure", label, err);
         if (err?.name === "NotAllowedError" || err?.name === "PermissionDeniedError") {
@@ -1531,7 +1562,10 @@ export default function App() {
       video: type === "video"
     };
     if (type === "voice") {
-      console.log("Requesting audio call media");
+      addWebRtcLog("Requesting audio media", constraints);
+      addWebRtcLog("Requesting audio call media", constraints);
+    } else if (type === "video") {
+      addWebRtcLog("Requesting video media", constraints);
     }
     console.log("webrtc requesting camera/mic permission", { type, constraints });
     return requestUserMedia(constraints, type === "video" ? "video call" : "audio call");
@@ -1550,6 +1584,10 @@ export default function App() {
       "webrtc local stream added",
       stream.getTracks().map((track) => `${track.kind}:${track.readyState}`)
     );
+    addWebRtcLog("Local media stream ready", {
+      type,
+      tracks: stream.getTracks().map((track) => `${track.kind}:${track.readyState}`)
+    });
     if (type === "screen" && !options.receivingScreen) {
       stream.getVideoTracks().forEach((track) => {
         track.onended = () => {
@@ -1583,7 +1621,7 @@ export default function App() {
       });
     }
     setRemoteStream(stream);
-    console.log(
+    addWebRtcLog(
       "Remote stream attached",
       stream.getTracks().map((track) => `${track.kind}:${track.readyState}`)
     );
@@ -1603,7 +1641,7 @@ export default function App() {
 
       const localCandidate = stats.get(selectedPair.localCandidateId);
       const remoteCandidate = stats.get(selectedPair.remoteCandidateId);
-      console.log("webrtc selected ICE candidate pair", {
+      addWebRtcLog("Selected ICE candidate pair", {
         local: localCandidate
           ? {
               type: localCandidate.candidateType,
@@ -1631,13 +1669,15 @@ export default function App() {
 
     if (!pcRef.current.remoteDescription) {
       pendingIceCandidatesRef.current.push(candidate);
-      console.log("Queued ICE candidate", pendingIceCandidatesRef.current.length);
+      addWebRtcLog("ICE candidate queued", pendingIceCandidatesRef.current.length);
+      addWebRtcLog("Queued ICE candidate", pendingIceCandidatesRef.current.length);
       console.log("webrtc ice candidate queued", pendingIceCandidatesRef.current.length);
       return;
     }
 
     await pcRef.current.addIceCandidate(new RTCIceCandidate(candidate));
-    console.log("Added ICE candidate");
+    addWebRtcLog("ICE candidate added");
+    addWebRtcLog("Added ICE candidate");
     console.log("webrtc ice candidate added");
   }
 
@@ -1648,7 +1688,8 @@ export default function App() {
     pendingIceCandidatesRef.current = [];
     for (const candidate of candidates) {
       await pcRef.current.addIceCandidate(new RTCIceCandidate(candidate));
-      console.log("Added ICE candidate");
+      addWebRtcLog("ICE candidate added");
+      addWebRtcLog("Added ICE candidate");
       console.log("webrtc queued ice candidate added");
     }
   }
@@ -1667,7 +1708,7 @@ export default function App() {
       remoteAudioRef.current.muted = false;
     }
 
-    console.log("webrtc Creating RTCPeerConnection", {
+    addWebRtcLog("Creating peer connection", {
       peerId,
       callType,
       iceServers: ICE_SERVERS.map((server) => server.urls)
@@ -1677,9 +1718,9 @@ export default function App() {
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        console.log("webrtc ICE candidate generated", event.candidate.candidate);
-        console.log("Sending ICE candidate", { to: peerId, callType: callRef.current?.type || callType });
-        console.log("webrtc ice candidate sent", { to: peerId, callType: callRef.current?.type || callType });
+        addWebRtcLog("ICE candidate generated", event.candidate.candidate);
+        addWebRtcLog("Sending ICE candidate", { to: peerId, callType: callRef.current?.type || callType });
+        addWebRtcLog("ICE candidate sent", { to: peerId, callType: callRef.current?.type || callType });
         socketRef.current?.emit("ice-candidate", {
           to: peerId,
           callerId: currentUser.id,
@@ -1691,10 +1732,14 @@ export default function App() {
     };
 
     pc.ontrack = (event) => {
-      console.log("Remote track received", event.track.kind);
+      addWebRtcLog("Remote track received", {
+        kind: event.track.kind,
+        id: event.track.id,
+        readyState: event.track.readyState
+      });
       console.log("webrtc remote track received", event.track.kind, event.streams?.[0]?.id);
       if (event.track.kind === "audio") {
-        console.log("Remote audio track received");
+        addWebRtcLog("Remote audio track received");
       }
       if (!remoteStreamRef.current.getTracks().some((track) => track.id === event.track.id)) {
         remoteStreamRef.current.addTrack(event.track);
@@ -1707,29 +1752,31 @@ export default function App() {
     };
 
     pc.onicegatheringstatechange = () => {
-      console.log("webrtc ICE gathering state change", pc.iceGatheringState);
+      addWebRtcLog("ICE gathering state", pc.iceGatheringState);
     };
     pc.oniceconnectionstatechange = () => {
-      console.log("webrtc ICE connection state change", pc.iceConnectionState);
+      addWebRtcLog("ICE connection state", pc.iceConnectionState);
       if (["connected", "completed"].includes(pc.iceConnectionState)) {
         logSelectedIceCandidatePair(pc);
       }
       if (["failed", "disconnected", "closed"].includes(pc.iceConnectionState)) {
         console.warn("webrtc ICE connection state warning", pc.iceConnectionState);
         if (!stoppingCallRef.current) {
+          addWebRtcLog("Call error", `ICE connection state: ${pc.iceConnectionState}`);
           setToast("Call connection failed. TURN server may be required.");
           setTimeout(() => setToast(""), 4000);
         }
       }
     };
     pc.onconnectionstatechange = () => {
-      console.log("webrtc WebRTC connection state change", pc.connectionState);
+      addWebRtcLog("Peer connection state", pc.connectionState);
       if (["connected"].includes(pc.connectionState)) {
         logSelectedIceCandidatePair(pc);
       }
       if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
         console.warn("webrtc connection state warning", pc.connectionState);
         if (!stoppingCallRef.current) {
+          addWebRtcLog("Call error", `Peer connection state: ${pc.connectionState}`);
           setToast("Call connection failed. TURN server may be required.");
           setTimeout(() => setToast(""), 4000);
         }
@@ -1738,13 +1785,15 @@ export default function App() {
       }
     };
     pc.onsignalingstatechange = () => {
-      console.log("webrtc signaling state", pc.signalingState);
+      addWebRtcLog("Signaling state", pc.signalingState);
     };
 
-    localStreamRef.current?.getTracks().forEach((track) => {
+    const localTracks = localStreamRef.current?.getTracks() || [];
+    localTracks.forEach((track) => {
       pc.addTrack(track, localStreamRef.current);
       console.log("webrtc local track added", track.kind, track.readyState);
     });
+    addWebRtcLog("Local tracks added", localTracks.map((track) => `${track.kind}:${track.readyState}`));
     if (!localStreamRef.current?.getVideoTracks().length) {
       pc.addTransceiver("video", { direction: "sendrecv" });
       console.log("webrtc video transceiver added for future screen/camera track");
@@ -1757,6 +1806,7 @@ export default function App() {
     if (!selectedUser || !socketRef.current) return;
 
     try {
+      addWebRtcLog("Call type selected", { type, peerId: selectedUser.id });
       if (!audioUnlockedRef.current) {
         await unlockCallAudio();
       }
@@ -1773,6 +1823,7 @@ export default function App() {
         callType: type
       });
     } catch (err) {
+      addWebRtcLog("Call error", { action: "startCall", name: err?.name, message: err?.message });
       alert(err.message || "Could not start call");
       endCallLocally();
     }
@@ -1783,6 +1834,7 @@ export default function App() {
 
     try {
       stopIncomingRingtone();
+      addWebRtcLog("Call type selected", { type: incomingCall.callType, peerId: incomingCall.from, incoming: true });
       await prepareLocalMedia(incomingCall.callType, { receivingScreen: incomingCall.callType === "screen" });
       createPeerConnection(incomingCall.from, incomingCall.callType);
       setCall({
@@ -1800,6 +1852,7 @@ export default function App() {
       });
       setIncomingCall(null);
     } catch (err) {
+      addWebRtcLog("Call error", { action: "acceptIncomingCall", name: err?.name, message: err?.message });
       alert(err.message || "Could not accept call");
       rejectIncomingCall();
     }
@@ -2073,9 +2126,9 @@ export default function App() {
         </div>
         {!audioUnlocked && (
           <div className="call-audio-banner">
-            <span>Tap to enable call sounds on mobile</span>
+            <span>Tap to enable audio</span>
             <button type="button" onClick={unlockCallAudio}>
-              Enable Call Sounds
+              Tap to enable audio
             </button>
           </div>
         )}
@@ -2296,6 +2349,37 @@ export default function App() {
         </button>
       </nav>
       {toast && <div className="toast">{toast}</div>}
+      {WEBRTC_DEBUG_ENABLED && showWebrtcDebug && (
+        <section className="webrtc-debug-panel" aria-label="WebRTC debug panel">
+          <header>
+            <strong>WebRTC Debug</strong>
+            <span>
+              <button type="button" onClick={() => setWebrtcLogs([])}>Clear</button>
+              <button type="button" onClick={() => setShowWebrtcDebug(false)}>Hide</button>
+            </span>
+          </header>
+          <div className="webrtc-debug-log">
+            {webrtcLogs.length === 0 ? (
+              <small>No WebRTC logs yet.</small>
+            ) : (
+              webrtcLogs.map((entry) => (
+                <article key={entry.id}>
+                  <time>{entry.timestamp}</time>
+                  <strong>{entry.message}</strong>
+                  {entry.data !== undefined && (
+                    <pre>{typeof entry.data === "string" ? entry.data : JSON.stringify(entry.data, null, 2)}</pre>
+                  )}
+                </article>
+              ))
+            )}
+          </div>
+        </section>
+      )}
+      {WEBRTC_DEBUG_ENABLED && !showWebrtcDebug && (
+        <button className="webrtc-debug-tab" type="button" onClick={() => setShowWebrtcDebug(true)}>
+          WebRTC
+        </button>
+      )}
       <audio
         ref={remoteAudioRef}
         autoPlay

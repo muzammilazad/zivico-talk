@@ -655,6 +655,90 @@ button {
   z-index: 40;
 }
 
+.webrtc-debug-panel {
+  background: rgba(12, 18, 24, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  bottom: 18px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+  color: #eef7f6;
+  display: grid;
+  gap: 8px;
+  max-height: min(44vh, 360px);
+  max-width: min(520px, calc(100vw - 24px));
+  padding: 10px;
+  position: fixed;
+  right: 12px;
+  width: 420px;
+  z-index: 90;
+}
+
+.webrtc-debug-panel header {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.webrtc-debug-panel header span {
+  display: flex;
+  gap: 6px;
+}
+
+.webrtc-debug-panel button,
+.webrtc-debug-tab {
+  background: #d6fff5;
+  border: 0;
+  border-radius: 6px;
+  color: #10241f;
+  cursor: pointer;
+  font-weight: 700;
+  min-height: 30px;
+  padding: 0 10px;
+}
+
+.webrtc-debug-log {
+  display: grid;
+  gap: 6px;
+  max-height: calc(min(44vh, 360px) - 52px);
+  overflow: auto;
+}
+
+.webrtc-debug-log article {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  display: grid;
+  gap: 3px;
+  padding: 7px;
+}
+
+.webrtc-debug-log time,
+.webrtc-debug-log small {
+  color: rgba(238, 247, 246, 0.7);
+  font-size: 0.72rem;
+}
+
+.webrtc-debug-log strong {
+  font-size: 0.82rem;
+}
+
+.webrtc-debug-log pre {
+  color: rgba(238, 247, 246, 0.86);
+  font-size: 0.72rem;
+  line-height: 1.35;
+  margin: 0;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.webrtc-debug-tab {
+  bottom: 18px;
+  position: fixed;
+  right: 12px;
+  z-index: 90;
+}
+
 .list-header {
   align-items: center;
   border-bottom: 1px solid #edf1ef;
@@ -2355,6 +2439,19 @@ button {
   .toast {
     bottom: calc(74px + env(safe-area-inset-bottom));
     max-width: calc(100vw - 20px);
+  }
+
+  .webrtc-debug-panel,
+  .webrtc-debug-tab {
+    bottom: calc(84px + env(safe-area-inset-bottom));
+  }
+
+  .webrtc-debug-panel {
+    left: 10px;
+    max-height: 38vh;
+    max-width: calc(100vw - 20px);
+    right: 10px;
+    width: auto;
   }
 }
 

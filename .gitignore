@@ -33,3 +33,21 @@ backend/uploads/
 # OS / editor
 .DS_Store
 .vscode/
+# env
+.env
+.env.local
+.env.production
+
+# Android build outputs
+*.apk
+*.aab
+frontend/android/app/build/
+frontend/android/app/release/
+
+# signing keys
+*.jks
+*.keystore
+
+# node
+node_modules/
+dist/
