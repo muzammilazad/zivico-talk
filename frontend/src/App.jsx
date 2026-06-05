@@ -550,11 +550,7 @@ export default function App() {
   async function unlockCallAudio() {
     const incomingAudio = getIncomingRingtone();
     const outgoingAudio = getOutgoingRingback();
-    const audioItems = [
-      incomingAudio,
-      outgoingAudio,
-      remoteAudioRef.current?.srcObject ? remoteAudioRef.current : null
-    ].filter(Boolean);
+    const audioItems = [incomingAudio, outgoingAudio];
     const previousSettings = audioItems.map((audio) => ({
       audio,
       muted: audio.muted,
@@ -578,6 +574,14 @@ export default function App() {
         audio.muted = muted;
         audio.volume = volume;
       });
+
+      const remoteAudio = remoteAudioRef.current;
+      if (remoteAudio?.srcObject) {
+        remoteAudio.muted = false;
+        remoteAudio.volume = 1;
+        await remoteAudio.play();
+        addWebRtcLog("Remote audio playback enabled");
+      }
 
       setAudioUnlocked(true);
       audioUnlockedRef.current = true;
@@ -618,9 +622,11 @@ export default function App() {
 
   useEffect(() => {
     if (!WEBRTC_DEBUG_ENABLED) return;
+    addWebRtcLog("ZEE_WEBRTC_FIXED_CODE_RUNNING");
     addWebRtcLog("ZEE_WEBRTC_NEW_CODE_RUNNING", { platform: Capacitor.getPlatform?.() || "web" });
     addWebRtcLog("API URL", API_BASE_URL || "(missing)");
     addWebRtcLog("Socket URL", SOCKET_URL || "(missing)");
+    addWebRtcLog("TURN URL loaded:", TURN_URL || "not configured");
     addWebRtcLog("TURN URL loaded", TURN_URL || "not configured");
   }, []);
 
@@ -957,54 +963,80 @@ export default function App() {
       const activeCall = callRef.current;
       if (!activeCall || String(activeCall.peer.id) !== String(from) || !pcRef.current) return;
 
-      stopOutgoingRingback();
-      setCall({ ...activeCall, status: "connected" });
-      const offer = await pcRef.current.createOffer();
-      addWebRtcLog("Offer created", { callType });
-      await pcRef.current.setLocalDescription(offer);
-      console.log("webrtc signaling state after local offer", pcRef.current.signalingState);
-      addWebRtcLog("Offer sent", { to: from, callType });
-      socket.emit("offer", { to: from, callerId: currentUser.id, receiverId: from, offer, callType });
+      try {
+        stopOutgoingRingback();
+        const connectedCall = { ...activeCall, status: "connected" };
+        callRef.current = connectedCall;
+        setCall(connectedCall);
+
+        const offer = await pcRef.current.createOffer();
+        addWebRtcLog("Offer created", { callType });
+        await pcRef.current.setLocalDescription(offer);
+        console.log("webrtc signaling state after local offer", pcRef.current.signalingState);
+        addWebRtcLog("Offer sent", { to: from, callType });
+        socket.emit("offer", { to: from, callerId: currentUser.id, receiverId: from, offer, callType });
+      } catch (err) {
+        addWebRtcLog("Call error", { action: "createOffer", name: err?.name, message: err?.message });
+        endCallLocally();
+      }
     }
 
     async function handleOffer({ from, callerId, receiverId, offer, callType }) {
-      addWebRtcLog("Offer received", { from, callerId, receiverId, callType });
-      let activeCall = callRef.current;
-      if (!pcRef.current) {
-        const fromUser = contacts.find((user) => String(user.id) === String(from)) || { id: from, name: "Caller", email: "" };
-        await prepareLocalMedia(callType, { receivingScreen: callType === "screen" });
-        createPeerConnection(from, callType);
-        activeCall = { peer: fromUser, type: callType, status: "connected", isCaller: false };
-        setCall(activeCall);
-      }
+      try {
+        addWebRtcLog("Offer received", { from, callerId, receiverId, callType });
+        let activeCall = callRef.current;
+        if (!pcRef.current) {
+          const fromUser = contacts.find((user) => String(user.id) === String(from)) || { id: from, name: "Caller", email: "" };
+          await initializeCallPeer(from, callType, { receivingScreen: callType === "screen" });
+          activeCall = { peer: fromUser, type: callType, status: "connected", isCaller: false };
+          callRef.current = activeCall;
+          setCall(activeCall);
+        } else if (!localStreamRef.current) {
+          const stream = await prepareLocalMedia(callType, { receivingScreen: callType === "screen" });
+          addLocalTracksToPeerConnection(pcRef.current, stream);
+        }
 
-      await pcRef.current.setRemoteDescription(new RTCSessionDescription(offer));
-      addWebRtcLog("Remote description set", { type: "offer", signalingState: pcRef.current.signalingState });
-      console.log("webrtc remote offer set", pcRef.current.signalingState);
-      await flushPendingIceCandidates();
-      const answer = await pcRef.current.createAnswer();
-      addWebRtcLog("Answer created", { callType });
-      await pcRef.current.setLocalDescription(answer);
-      console.log("webrtc signaling state after local answer", pcRef.current.signalingState);
-      addWebRtcLog("Answer sent", { to: from, callType });
-      socket.emit("answer", { to: from, callerId: from, receiverId: currentUser.id, answer, callType });
+        const pc = pcRef.current;
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        addWebRtcLog("Remote description set", { type: "offer", signalingState: pc.signalingState });
+        console.log("webrtc remote offer set", pc.signalingState);
+        await flushPendingIceCandidates();
+        const answer = await pc.createAnswer();
+        addWebRtcLog("Answer created", { callType });
+        await pc.setLocalDescription(answer);
+        console.log("webrtc signaling state after local answer", pc.signalingState);
+        addWebRtcLog("Answer sent", { to: from, callType });
+        socket.emit("answer", { to: from, callerId: from, receiverId: currentUser.id, answer, callType });
+      } catch (err) {
+        addWebRtcLog("Call error", { action: "handleOffer", name: err?.name, message: err?.message });
+        endCallLocally();
+      }
     }
 
     async function handleAnswer({ from, callerId, receiverId, answer, callType }) {
-      addWebRtcLog("Answer received", { from, callerId, receiverId, callType });
-      if (pcRef.current) {
-        await pcRef.current.setRemoteDescription(new RTCSessionDescription(answer));
-        addWebRtcLog("Remote description set", { type: "answer", signalingState: pcRef.current.signalingState });
-        console.log("webrtc remote answer set", pcRef.current.signalingState);
-        await flushPendingIceCandidates();
+      try {
+        addWebRtcLog("Answer received", { from, callerId, receiverId, callType });
+        if (pcRef.current) {
+          await pcRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+          addWebRtcLog("Remote description set", { type: "answer", signalingState: pcRef.current.signalingState });
+          console.log("webrtc remote answer set", pcRef.current.signalingState);
+          await flushPendingIceCandidates();
+        }
+      } catch (err) {
+        addWebRtcLog("Call error", { action: "handleAnswer", name: err?.name, message: err?.message });
+        endCallLocally();
       }
     }
 
     async function handleIceCandidate({ from, callerId, receiverId, candidate, callType }) {
-      addWebRtcLog("ICE candidate received", { from, callerId, receiverId, callType });
-      addWebRtcLog("Received ICE candidate", { from, callerId, receiverId, callType });
-      console.log("webrtc ice candidate received", candidate?.candidate || candidate?.type || "candidate");
-      await addOrQueueIceCandidate(candidate);
+      try {
+        addWebRtcLog("ICE candidate received", { from, callerId, receiverId, callType });
+        addWebRtcLog("Received ICE candidate", { from, callerId, receiverId, callType });
+        console.log("webrtc ice candidate received", candidate?.candidate || candidate?.type || "candidate");
+        await addOrQueueIceCandidate(candidate);
+      } catch (err) {
+        addWebRtcLog("Call error", { action: "addIceCandidate", name: err?.name, message: err?.message });
+      }
     }
 
     function handleEndCall({ from, callType, callStatus }) {
@@ -1557,18 +1589,22 @@ export default function App() {
       return new MediaStream(tracks);
     }
 
-    const constraints = {
-      audio: true,
-      video: type === "video"
-    };
     if (type === "voice") {
+      const constraints = { audio: true, video: false };
       addWebRtcLog("Requesting audio media", constraints);
       addWebRtcLog("Requesting audio call media", constraints);
-    } else if (type === "video") {
-      addWebRtcLog("Requesting video media", constraints);
+      console.log("webrtc requesting camera/mic permission", { type, constraints });
+      return requestUserMedia(constraints, "audio call");
     }
-    console.log("webrtc requesting camera/mic permission", { type, constraints });
-    return requestUserMedia(constraints, type === "video" ? "video call" : "audio call");
+
+    if (type === "video") {
+      const constraints = { audio: true, video: true };
+      addWebRtcLog("Requesting video media", constraints);
+      console.log("webrtc requesting camera/mic permission", { type, constraints });
+      return requestUserMedia(constraints, "video call");
+    }
+
+    throw new Error(`Unsupported call type: ${type}`);
   }
 
   async function prepareLocalMedia(type, options = {}) {
@@ -1665,9 +1701,9 @@ export default function App() {
   }
 
   async function addOrQueueIceCandidate(candidate) {
-    if (!candidate || !pcRef.current) return;
+    if (!candidate) return;
 
-    if (!pcRef.current.remoteDescription) {
+    if (!pcRef.current || !pcRef.current.remoteDescription) {
       pendingIceCandidatesRef.current.push(candidate);
       addWebRtcLog("ICE candidate queued", pendingIceCandidatesRef.current.length);
       addWebRtcLog("Queued ICE candidate", pendingIceCandidatesRef.current.length);
@@ -1694,10 +1730,31 @@ export default function App() {
     }
   }
 
+  function addLocalTracksToPeerConnection(pc, stream) {
+    if (!pc || !stream) {
+      throw new Error("Cannot add local tracks before peer connection and local media are ready.");
+    }
+
+    const existingTrackIds = new Set(
+      pc.getSenders()
+        .map((sender) => sender.track?.id)
+        .filter(Boolean)
+    );
+    const addedTracks = [];
+
+    stream.getTracks().forEach((track) => {
+      if (existingTrackIds.has(track.id)) return;
+      pc.addTrack(track, stream);
+      addedTracks.push(`${track.kind}:${track.readyState}`);
+    });
+
+    addWebRtcLog("Local tracks added:", addedTracks);
+    addWebRtcLog("Local tracks added", addedTracks);
+  }
+
   function createPeerConnection(peerId, callType = "voice") {
     pcRef.current?.close();
     remoteStreamRef.current = new MediaStream();
-    pendingIceCandidatesRef.current = [];
     setRemoteStream(remoteStreamRef.current);
 
     if (remoteVideoRef.current) {
@@ -1718,13 +1775,16 @@ export default function App() {
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
+        const activeCall = callRef.current;
+        const callerId = activeCall?.isCaller === false ? peerId : currentUser.id;
+        const receiverId = activeCall?.isCaller === false ? currentUser.id : peerId;
         addWebRtcLog("ICE candidate generated", event.candidate.candidate);
         addWebRtcLog("Sending ICE candidate", { to: peerId, callType: callRef.current?.type || callType });
         addWebRtcLog("ICE candidate sent", { to: peerId, callType: callRef.current?.type || callType });
         socketRef.current?.emit("ice-candidate", {
           to: peerId,
-          callerId: currentUser.id,
-          receiverId: peerId,
+          callerId,
+          receiverId,
           candidate: event.candidate.toJSON(),
           callType: callRef.current?.type || callType
         });
@@ -1737,6 +1797,7 @@ export default function App() {
         id: event.track.id,
         readyState: event.track.readyState
       });
+      addWebRtcLog("Remote track received:", event.track.kind);
       console.log("webrtc remote track received", event.track.kind, event.streams?.[0]?.id);
       if (event.track.kind === "audio") {
         addWebRtcLog("Remote audio track received");
@@ -1756,6 +1817,7 @@ export default function App() {
     };
     pc.oniceconnectionstatechange = () => {
       addWebRtcLog("ICE connection state", pc.iceConnectionState);
+      addWebRtcLog("ICE connection state:", pc.iceConnectionState);
       if (["connected", "completed"].includes(pc.iceConnectionState)) {
         logSelectedIceCandidatePair(pc);
       }
@@ -1770,6 +1832,7 @@ export default function App() {
     };
     pc.onconnectionstatechange = () => {
       addWebRtcLog("Peer connection state", pc.connectionState);
+      addWebRtcLog("Peer connection state:", pc.connectionState);
       if (["connected"].includes(pc.connectionState)) {
         logSelectedIceCandidatePair(pc);
       }
@@ -1788,17 +1851,20 @@ export default function App() {
       addWebRtcLog("Signaling state", pc.signalingState);
     };
 
-    const localTracks = localStreamRef.current?.getTracks() || [];
-    localTracks.forEach((track) => {
-      pc.addTrack(track, localStreamRef.current);
-      console.log("webrtc local track added", track.kind, track.readyState);
-    });
-    addWebRtcLog("Local tracks added", localTracks.map((track) => `${track.kind}:${track.readyState}`));
-    if (!localStreamRef.current?.getVideoTracks().length) {
-      pc.addTransceiver("video", { direction: "sendrecv" });
-      console.log("webrtc video transceiver added for future screen/camera track");
-    }
     pcRef.current = pc;
+    return pc;
+  }
+
+  async function initializeCallPeer(peerId, callType, mediaOptions = {}) {
+    const pc = createPeerConnection(peerId, callType);
+    const stream = await prepareLocalMedia(callType, mediaOptions);
+
+    if (pcRef.current !== pc || pc.signalingState === "closed") {
+      stream.getTracks().forEach((track) => track.stop());
+      throw new Error("Call setup was interrupted before local media could be attached.");
+    }
+
+    addLocalTracksToPeerConnection(pc, stream);
     return pc;
   }
 
@@ -1806,14 +1872,17 @@ export default function App() {
     if (!selectedUser || !socketRef.current) return;
 
     try {
+      pendingIceCandidatesRef.current = [];
       addWebRtcLog("Call type selected", { type, peerId: selectedUser.id });
+      addWebRtcLog("Call type:", type);
       if (!audioUnlockedRef.current) {
         await unlockCallAudio();
       }
       playOutgoingRingback();
-      await prepareLocalMedia(type);
-      createPeerConnection(selectedUser.id, type);
-      setCall({ peer: selectedUser, type, status: "ringing", isCaller: true });
+      await initializeCallPeer(selectedUser.id, type);
+      const outgoingCall = { peer: selectedUser, type, status: "ringing", isCaller: true };
+      callRef.current = outgoingCall;
+      setCall(outgoingCall);
       callStartedAtRef.current = Date.now();
       console.log("call type sent", type);
       socketRef.current.emit("call-user", {
@@ -1834,15 +1903,20 @@ export default function App() {
 
     try {
       stopIncomingRingtone();
+      pendingIceCandidatesRef.current = [];
       addWebRtcLog("Call type selected", { type: incomingCall.callType, peerId: incomingCall.from, incoming: true });
-      await prepareLocalMedia(incomingCall.callType, { receivingScreen: incomingCall.callType === "screen" });
-      createPeerConnection(incomingCall.from, incomingCall.callType);
-      setCall({
+      addWebRtcLog("Call type:", incomingCall.callType);
+      await initializeCallPeer(incomingCall.from, incomingCall.callType, {
+        receivingScreen: incomingCall.callType === "screen"
+      });
+      const acceptedCall = {
         peer: incomingCall.fromUser,
         type: incomingCall.callType,
         status: "connected",
         isCaller: false
-      });
+      };
+      callRef.current = acceptedCall;
+      setCall(acceptedCall);
       callStartedAtRef.current = Date.now();
       socketRef.current.emit("call-accepted", {
         to: incomingCall.from,
@@ -1850,6 +1924,7 @@ export default function App() {
         receiverId: currentUser.id,
         callType: incomingCall.callType
       });
+      incomingCallRef.current = null;
       setIncomingCall(null);
     } catch (err) {
       addWebRtcLog("Call error", { action: "acceptIncomingCall", name: err?.name, message: err?.message });

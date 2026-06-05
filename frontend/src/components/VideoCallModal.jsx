@@ -83,7 +83,7 @@ export default function VideoCallModal({
         ) : (
           <div className="video-grid">
             <div className="video-tile">
-              <video ref={remoteVideoRef} autoPlay playsInline />
+              <video ref={remoteVideoRef} autoPlay playsInline muted />
               <span>{type === "screen" ? "Shared screen" : "Remote"}</span>
             </div>
             <div className="video-tile local">
