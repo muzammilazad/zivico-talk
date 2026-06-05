@@ -22,6 +22,10 @@ function trackSummary(stream) {
   return stream?.getTracks().map((track) => `${track.kind}:${track.readyState}`) || [];
 }
 
+function createCallId() {
+  return globalThis.crypto?.randomUUID?.() || `call-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 export default function useWebRTCCall({
   socket,
   currentUser,
@@ -43,6 +47,7 @@ export default function useWebRTCCall({
   const localStreamRef = useRef(null);
   const remoteStreamRef = useRef(new MediaStream());
   const pendingCandidatesRef = useRef([]);
+  const offerWaitersRef = useRef([]);
   const callRef = useRef(null);
   const incomingCallRef = useRef(null);
   const callbacksRef = useRef({});
@@ -144,6 +149,7 @@ export default function useWebRTCCall({
     pcRef.current?.close();
     pcRef.current = null;
     pendingCandidatesRef.current = [];
+    offerWaitersRef.current.splice(0).forEach((resolve) => resolve(null));
     stopStreams();
 
     const closedCall = callRef.current || incomingCallRef.current;
@@ -249,14 +255,15 @@ export default function useWebRTCCall({
 
     pc.onicecandidate = (event) => {
       if (!event.candidate) return;
-      addWebRtcLog("ICE generated", event.candidate.candidate);
+      addWebRtcLog("ICE candidate generated", event.candidate.candidate);
       socket?.emit("ice-candidate", {
         to: peerId,
+        callId: callRef.current?.callId || incomingCallRef.current?.callId,
         from: currentUser?.id,
         callType,
         candidate: event.candidate.toJSON()
       });
-      addWebRtcLog("ICE sent", { to: peerId });
+      addWebRtcLog("ICE candidate sent", { to: peerId });
     };
 
     pc.ontrack = (event) => {
@@ -271,11 +278,11 @@ export default function useWebRTCCall({
     };
 
     pc.oniceconnectionstatechange = () => {
-      addWebRtcLog("ICE state", pc.iceConnectionState);
+      addWebRtcLog("ICE connection state:", pc.iceConnectionState);
     };
 
     pc.onconnectionstatechange = () => {
-      addWebRtcLog("connection state", pc.connectionState);
+      addWebRtcLog("Peer connection state:", pc.connectionState);
       if (pc.connectionState === "failed") {
         reportError("connection", new Error("Call connection failed. Check the TURN server."));
       }
@@ -297,9 +304,12 @@ export default function useWebRTCCall({
     try {
       cleanup("replaced", false);
       pendingCandidatesRef.current = [];
+      const callId = createCallId();
+      addWebRtcLog("Starting call", { callId, peerId: peer.id, callType });
       addWebRtcLog("call type", callType);
 
       const nextCall = {
+        callId,
         direction: "outgoing",
         peer,
         peerId: String(peer.id),
@@ -311,14 +321,42 @@ export default function useWebRTCCall({
       setCall(nextCall);
       callbacksRef.current.onOutgoingCall?.(nextCall);
 
+      const startResult = await new Promise((resolve, reject) => {
+        socket.timeout(5000).emit(
+          "call-start",
+          {
+            to: peer.id,
+            callId,
+            callType
+          },
+          (error, response) => {
+            if (error) {
+              reject(new Error("Call signaling timed out."));
+              return;
+            }
+            resolve(response);
+          }
+        );
+      });
+
+      if (!startResult?.ok) {
+        const reason = startResult?.reason === "offline" ? "Receiver is offline." : "Could not start call.";
+        throw new Error(reason);
+      }
+
       const pc = createPeerConnection(peer.id, callType);
       const stream = await getLocalMedia(callType);
+      if (callRef.current?.callId !== callId) {
+        stream.getTracks().forEach((track) => track.stop());
+        throw new Error("Call is no longer active.");
+      }
       addLocalTracks(pc, stream);
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       socket.emit("call-offer", {
         to: peer.id,
+        callId,
         from: currentUser.id,
         fromUser: {
           id: currentUser.id,
@@ -330,20 +368,56 @@ export default function useWebRTCCall({
       });
       addWebRtcLog("offer sent", { to: peer.id, callType });
     } catch (error) {
+      const activeCall = callRef.current;
+      if (activeCall?.callId) {
+        socket.emit("call-end", {
+          to: activeCall.peerId,
+          callId: activeCall.callId,
+          from: currentUser.id,
+          callType: activeCall.callType
+        });
+      }
       reportError("startCall", error);
       cleanup("error");
       throw error;
     }
   }, [addLocalTracks, addWebRtcLog, cleanup, createPeerConnection, currentUser, getLocalMedia, reportError, socket]);
 
+  const waitForOffer = useCallback(async () => {
+    if (incomingCallRef.current?.offer) return incomingCallRef.current;
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => resolve(null), 5000);
+      offerWaitersRef.current.push((pendingCall) => {
+        clearTimeout(timeout);
+        resolve(pendingCall);
+      });
+    });
+  }, []);
+
   const acceptCall = useCallback(async () => {
-    const pendingCall = incomingCallRef.current;
+    let pendingCall = incomingCallRef.current;
     if (!socket || !currentUser || !pendingCall) return;
 
     try {
+      addWebRtcLog("Call accepted", { callId: pendingCall.callId });
+      if (!pendingCall.offer) {
+        const waitingCall = { ...pendingCall, status: "connecting" };
+        incomingCallRef.current = waitingCall;
+        setIncomingCall(waitingCall);
+        pendingCall = await waitForOffer();
+      }
+      if (!pendingCall?.offer) {
+        throw new Error("Call offer was not received.");
+      }
+
       addWebRtcLog("call type", pendingCall.callType);
       const pc = createPeerConnection(pendingCall.from, pendingCall.callType);
       const stream = await getLocalMedia(pendingCall.callType, pendingCall.callType === "screen");
+      if (incomingCallRef.current?.callId !== pendingCall.callId) {
+        stream.getTracks().forEach((track) => track.stop());
+        throw new Error("Incoming call is no longer active.");
+      }
       addLocalTracks(pc, stream);
 
       await pc.setRemoteDescription(new RTCSessionDescription(pendingCall.offer));
@@ -354,6 +428,7 @@ export default function useWebRTCCall({
       await pc.setLocalDescription(answer);
       socket.emit("call-answer", {
         to: pendingCall.from,
+        callId: pendingCall.callId,
         from: currentUser.id,
         callType: pendingCall.callType,
         answer: pc.localDescription
@@ -361,6 +436,7 @@ export default function useWebRTCCall({
       addWebRtcLog("answer sent", { to: pendingCall.from });
 
       const activeCall = {
+        callId: pendingCall.callId,
         direction: "incoming",
         peer: pendingCall.fromUser,
         peerId: String(pendingCall.from),
@@ -374,23 +450,33 @@ export default function useWebRTCCall({
       setIncomingCall(null);
       callbacksRef.current.onCallAnswered?.(activeCall);
     } catch (error) {
+      if (pendingCall?.callId) {
+        socket.emit("call-reject", {
+          to: pendingCall.from,
+          callId: pendingCall.callId,
+          from: currentUser.id,
+          callType: pendingCall.callType
+        });
+      }
       reportError("acceptCall", error);
       cleanup("error");
       throw error;
     }
-  }, [addLocalTracks, addWebRtcLog, cleanup, createPeerConnection, currentUser, flushCandidates, getLocalMedia, reportError, socket]);
+  }, [addLocalTracks, addWebRtcLog, cleanup, createPeerConnection, currentUser, flushCandidates, getLocalMedia, reportError, socket, waitForOffer]);
 
   const rejectCall = useCallback(() => {
     const pendingCall = incomingCallRef.current;
     if (!socket || !pendingCall) return;
 
+    addWebRtcLog("Call rejected", { callId: pendingCall.callId });
     socket.emit("call-reject", {
       to: pendingCall.from,
+      callId: pendingCall.callId,
       from: currentUser?.id,
       callType: pendingCall.callType
     });
     cleanup("rejected");
-  }, [cleanup, currentUser?.id, socket]);
+  }, [addWebRtcLog, cleanup, currentUser?.id, socket]);
 
   const endCall = useCallback(() => {
     const activeCall = callRef.current;
@@ -400,6 +486,7 @@ export default function useWebRTCCall({
     if (socket && target) {
       socket.emit("call-end", {
         to: target,
+        callId: activeCall?.callId || pendingCall?.callId,
         from: currentUser?.id,
         callType: activeCall?.callType || pendingCall?.callType || "voice"
       });
@@ -425,16 +512,23 @@ export default function useWebRTCCall({
 
   useEffect(() => {
     addWebRtcLog("NEW_WEBRTC_MODULE_RUNNING");
+    addWebRtcLog("TURN URL loaded:", TURN_URL || "not configured");
     addWebRtcLog("TURN URL loaded", TURN_URL || "not configured");
   }, [addWebRtcLog]);
 
   useEffect(() => {
     if (!socket) return undefined;
 
-    function handleOffer(payload) {
-      addWebRtcLog("offer received", { from: payload.from, callType: payload.callType });
+    function handleIncomingCall(payload) {
+      addWebRtcLog("Incoming call event received", {
+        callId: payload.callId,
+        from: payload.from,
+        callType: payload.callType
+      });
+      addWebRtcLog("Opening incoming call modal", { callId: payload.callId });
       const pendingCall = {
         ...payload,
+        status: "ringing",
         fromUser: payload.fromUser || {
           id: payload.from,
           name: "Zee Talk user",
@@ -444,6 +538,22 @@ export default function useWebRTCCall({
       incomingCallRef.current = pendingCall;
       setIncomingCall(pendingCall);
       callbacksRef.current.onIncomingCall?.(pendingCall);
+    }
+
+    function handleOffer(payload) {
+      addWebRtcLog("offer received", { from: payload.from, callType: payload.callType });
+      const pendingCall = {
+        ...(incomingCallRef.current || {}),
+        ...payload,
+        fromUser: payload.fromUser || incomingCallRef.current?.fromUser || {
+          id: payload.from,
+          name: "Zee Talk user",
+          email: ""
+        }
+      };
+      incomingCallRef.current = pendingCall;
+      setIncomingCall(pendingCall);
+      offerWaitersRef.current.splice(0).forEach((resolve) => resolve(pendingCall));
     }
 
     async function handleAnswer(payload) {
@@ -459,6 +569,7 @@ export default function useWebRTCCall({
           const connectedCall = { ...current, status: "connected" };
           callRef.current = connectedCall;
           setCall(connectedCall);
+          addWebRtcLog("Call accepted", { callId: connectedCall.callId });
           callbacksRef.current.onCallAnswered?.(connectedCall);
         }
       } catch (error) {
@@ -468,7 +579,7 @@ export default function useWebRTCCall({
 
     async function handleCandidate(payload) {
       try {
-        addWebRtcLog("ICE received", { from: payload.from });
+        addWebRtcLog("ICE candidate received", { from: payload.from });
         await addOrQueueCandidate(payload.candidate);
       } catch (error) {
         reportError("handleCandidate", error);
@@ -476,6 +587,7 @@ export default function useWebRTCCall({
     }
 
     function handleReject() {
+      addWebRtcLog("Call rejected");
       cleanup("rejected");
     }
 
@@ -483,18 +595,45 @@ export default function useWebRTCCall({
       cleanup("remote-ended");
     }
 
+    function handleTimeout() {
+      addWebRtcLog("Call timed out");
+      callbacksRef.current.onError?.({ action: "timeout", message: "No answer" });
+      cleanup("timeout");
+    }
+
+    function handleUnavailable(payload) {
+      addWebRtcLog("Call timed out", payload?.reason || "unavailable");
+      callbacksRef.current.onError?.({
+        action: "unavailable",
+        message: payload?.reason === "offline" ? "Receiver is offline" : "No answer"
+      });
+      cleanup(payload?.reason || "unavailable");
+    }
+
+    function handleMissedCall(payload) {
+      addWebRtcLog("Missed call received", payload?.callId);
+    }
+
+    socket.on("incoming-call", handleIncomingCall);
     socket.on("call-offer", handleOffer);
     socket.on("call-answer", handleAnswer);
     socket.on("ice-candidate", handleCandidate);
     socket.on("call-reject", handleReject);
     socket.on("call-end", handleEnd);
+    socket.on("call-timeout", handleTimeout);
+    socket.on("call-unavailable", handleUnavailable);
+    socket.on("missed-call", handleMissedCall);
 
     return () => {
+      socket.off("incoming-call", handleIncomingCall);
       socket.off("call-offer", handleOffer);
       socket.off("call-answer", handleAnswer);
       socket.off("ice-candidate", handleCandidate);
       socket.off("call-reject", handleReject);
       socket.off("call-end", handleEnd);
+      socket.off("call-timeout", handleTimeout);
+      socket.off("call-unavailable", handleUnavailable);
+      socket.off("missed-call", handleMissedCall);
     };
   }, [addOrQueueCandidate, addWebRtcLog, cleanup, flushCandidates, reportError, socket]);
 

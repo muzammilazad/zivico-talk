@@ -1,8 +1,16 @@
 import { v4 as uuid } from "uuid";
 import { verifySocketToken } from "./middleware/auth.js";
-import { createNotification, markConversationRead, saveMessage, updateMessageStatus } from "./services/store.js";
+import {
+  createNotification,
+  markConversationRead,
+  saveCallEvent,
+  saveMessage,
+  updateMessageStatus
+} from "./services/store.js";
 
 const onlineUsers = new Map();
+const activeCalls = new Map();
+const CALL_TIMEOUT_MS = 30_000;
 
 export function getOnlineUserCount() {
   return onlineUsers.size;
@@ -18,6 +26,39 @@ function publicOnlineUsers() {
 
 function emitPresence(io) {
   io.emit("presence", publicOnlineUsers());
+}
+
+async function createCallEventAndNotify(io, call, status) {
+  const event = await saveCallEvent({
+    id: uuid(),
+    type: "call_event",
+    callType: call.callType,
+    status,
+    callerId: call.callerId,
+    receiverId: call.receiverId,
+    durationSeconds: 0,
+    createdAt: new Date().toISOString()
+  });
+
+  io.to(String(call.callerId)).emit("call-event-created", event);
+  io.to(String(call.receiverId)).emit("call-event-created", event);
+
+  if (status === "missed") {
+    const notification = await createNotification({
+      userId: call.receiverId,
+      type: "missed_call",
+      title: "Missed call",
+      body: `${call.callType} call`
+    });
+    io.to(String(call.receiverId)).emit("notification-created", notification);
+    io.to(String(call.receiverId)).emit("missed-call", { callId: call.callId, event });
+  }
+
+  return event;
+}
+
+function clearCallTimeout(call) {
+  if (call?.timeout) clearTimeout(call.timeout);
 }
 
 export function setupSocket(io) {
@@ -125,9 +166,71 @@ export function setupSocket(io) {
       io.to(String(to)).emit("typing", { from: user.id, name: user.name, isTyping: Boolean(isTyping) });
     });
 
-    socket.on("call-offer", ({ to, offer, callType }) => {
+    socket.on("call-start", async ({ to, callId, callType }, ack) => {
+      const receiverId = String(to || "");
+      const nextCallId = String(callId || uuid());
+      const type = callType || "voice";
+      const receiverRoom = io.sockets.adapter.rooms.get(receiverId);
+      const receiverSocketIds = receiverRoom ? Array.from(receiverRoom) : [];
+
+      console.log("CALL_START received", { callId: nextCallId, callerId: user.id, callType: type });
+      console.log("Receiver userId", receiverId);
+      console.log("Receiver socketId", receiverSocketIds.length ? receiverSocketIds : "offline");
+
+      if (!receiverId || !receiverRoom?.size) {
+        console.log("Receiver not online, creating missed call", { callId: nextCallId, receiverId });
+        const offlineCall = {
+          callId: nextCallId,
+          callerId: user.id,
+          receiverId,
+          callType: type
+        };
+        if (receiverId) await createCallEventAndNotify(io, offlineCall, "missed");
+        socket.emit("call-unavailable", { callId: nextCallId, reason: "offline" });
+        ack?.({ ok: false, callId: nextCallId, reason: "offline" });
+        return;
+      }
+
+      const call = {
+        callId: nextCallId,
+        callerId: user.id,
+        receiverId,
+        callType: type,
+        answered: false,
+        timeout: null
+      };
+
+      call.timeout = setTimeout(async () => {
+        try {
+          const activeCall = activeCalls.get(nextCallId);
+          if (!activeCall || activeCall.answered) return;
+
+          activeCalls.delete(nextCallId);
+          console.log("Call timeout, creating missed call", { callId: nextCallId });
+          await createCallEventAndNotify(io, activeCall, "missed");
+          io.to(String(activeCall.callerId)).emit("call-timeout", { callId: nextCallId });
+          io.to(String(activeCall.receiverId)).emit("call-timeout", { callId: nextCallId });
+        } catch (error) {
+          console.error("Call timeout handling failed", error);
+        }
+      }, CALL_TIMEOUT_MS);
+
+      activeCalls.set(nextCallId, call);
+      console.log("Emitting incoming-call to receiver", { callId: nextCallId, receiverId });
+      io.to(receiverId).emit("incoming-call", {
+        callId: nextCallId,
+        from: user.id,
+        fromUser: { id: user.id, name: user.name, email: user.email },
+        callType: type,
+        timeoutMs: CALL_TIMEOUT_MS
+      });
+      ack?.({ ok: true, callId: nextCallId });
+    });
+
+    socket.on("call-offer", ({ to, callId, offer, callType }) => {
       if (!to || !offer) return;
       io.to(String(to)).emit("call-offer", {
+        callId,
         from: user.id,
         fromUser: { id: user.id, name: user.name, email: user.email },
         offer,
@@ -135,35 +238,59 @@ export function setupSocket(io) {
       });
     });
 
-    socket.on("call-answer", ({ to, answer, callType }) => {
+    socket.on("call-answer", ({ to, callId, answer, callType }) => {
       if (!to || !answer) return;
+      const call = activeCalls.get(String(callId || ""));
+      if (call) {
+        call.answered = true;
+        clearCallTimeout(call);
+        activeCalls.set(call.callId, call);
+      }
       io.to(String(to)).emit("call-answer", {
+        callId,
         from: user.id,
         answer,
         callType: callType || "voice"
       });
     });
 
-    socket.on("ice-candidate", ({ to, candidate, callType }) => {
+    socket.on("ice-candidate", ({ to, callId, candidate, callType }) => {
       if (!to || !candidate) return;
       io.to(String(to)).emit("ice-candidate", {
+        callId,
         from: user.id,
         candidate,
         callType: callType || "voice"
       });
     });
 
-    socket.on("call-reject", ({ to, callType }) => {
+    socket.on("call-reject", async ({ to, callId, callType }) => {
       if (!to) return;
+      const call = activeCalls.get(String(callId || ""));
+      if (call) {
+        clearCallTimeout(call);
+        activeCalls.delete(call.callId);
+        await createCallEventAndNotify(io, call, "declined");
+      }
       io.to(String(to)).emit("call-reject", {
+        callId,
         from: user.id,
         callType: callType || "voice"
       });
     });
 
-    socket.on("call-end", ({ to, callType }) => {
+    socket.on("call-end", async ({ to, callId, callType }) => {
       if (!to) return;
+      const call = activeCalls.get(String(callId || ""));
+      if (call) {
+        clearCallTimeout(call);
+        activeCalls.delete(call.callId);
+        if (!call.answered) {
+          await createCallEventAndNotify(io, call, "missed");
+        }
+      }
       io.to(String(to)).emit("call-end", {
+        callId,
         from: user.id,
         callType: callType || "voice"
       });
@@ -172,7 +299,36 @@ export function setupSocket(io) {
     socket.on("disconnect", () => {
       const current = onlineUsers.get(user.id);
       if (current?.socketId === socket.id) {
-        onlineUsers.delete(user.id);
+        const remainingUserSockets = io.sockets.adapter.rooms.get(String(user.id));
+        const nextSocketId = remainingUserSockets ? Array.from(remainingUserSockets)[0] : null;
+        if (nextSocketId) {
+          onlineUsers.set(user.id, { socketId: nextSocketId, user });
+        } else {
+          onlineUsers.delete(user.id);
+        }
+      }
+
+      const remainingUserSockets = io.sockets.adapter.rooms.get(String(user.id));
+      if (!remainingUserSockets?.size) {
+        for (const [callId, call] of activeCalls) {
+          if (call.answered || (call.callerId !== user.id && call.receiverId !== user.id)) continue;
+
+          clearCallTimeout(call);
+          activeCalls.delete(callId);
+          if (call.callerId === user.id) {
+            console.log("Receiver not online, creating missed call", {
+              callId,
+              receiverId: call.receiverId,
+              reason: "caller-disconnected"
+            });
+            createCallEventAndNotify(io, call, "missed").catch(console.error);
+            io.to(String(call.receiverId)).emit("call-end", {
+              callId,
+              from: user.id,
+              callType: call.callType
+            });
+          }
+        }
       }
       emitPresence(io);
     });

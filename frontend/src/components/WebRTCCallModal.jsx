@@ -9,6 +9,7 @@ export default function WebRTCCallModal({
   logs,
   showDebug,
   audioBlocked,
+  ringtoneBlocked,
   muted,
   cameraOff,
   onAccept,
@@ -17,6 +18,7 @@ export default function WebRTCCallModal({
   onToggleMute,
   onToggleCamera,
   onEnableAudio,
+  onEnableRingtone,
   onToggleDebug,
   onClearLogs
 }) {
@@ -28,7 +30,9 @@ export default function WebRTCCallModal({
   const isIncoming = Boolean(incomingCall && !call);
   const hasVideo = callType === "video" || callType === "screen";
   const status = isIncoming
-    ? `Incoming ${callType} call`
+    ? incomingCall?.status === "connecting"
+      ? "Connecting call"
+      : `Incoming ${callType} call`
     : call?.status === "calling"
       ? `Calling ${peer?.name || "Zee Talk user"}`
       : "Connected";
@@ -71,6 +75,12 @@ export default function WebRTCCallModal({
         {audioBlocked && (
           <button className="enable-call-audio" type="button" onClick={onEnableAudio}>
             Tap to enable audio
+          </button>
+        )}
+
+        {isIncoming && ringtoneBlocked && (
+          <button className="enable-call-audio" type="button" onClick={onEnableRingtone}>
+            Tap to enable ringtone
           </button>
         )}
 

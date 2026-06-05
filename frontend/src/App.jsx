@@ -408,6 +408,7 @@ export default function App() {
   const [replyToMessage, setReplyToMessage] = useState(null);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [audioUnlocked, setAudioUnlocked] = useState(false);
+  const [ringtoneBlocked, setRingtoneBlocked] = useState(false);
   const [callSocket, setCallSocket] = useState(null);
   const [notificationPermission, setNotificationPermission] = useState(
     typeof Notification === "undefined" ? "unsupported" : Notification.permission
@@ -479,6 +480,8 @@ export default function App() {
 
   function handleNewIncomingCall(callPayload) {
     setActiveView("chats");
+    console.log("Incoming call event received", callPayload);
+    console.log("Opening incoming call modal");
     if (isAppForegrounded()) {
       playIncomingRingtone();
     } else {
@@ -488,23 +491,22 @@ export default function App() {
 
   function handleCallClosed(closedCall) {
     stopCallSounds();
+    setRingtoneBlocked(false);
     const peerId = closedCall?.peerId || closedCall?.from;
-    if (!currentUser || !peerId) return;
+    if (
+      !currentUser ||
+      !peerId ||
+      closedCall.status !== "connected" ||
+      closedCall.direction !== "outgoing"
+    ) return;
 
     const isCaller = closedCall.direction === "outgoing";
     const durationSeconds = closedCall.startedAt
       ? Math.max(0, Math.round((Date.now() - closedCall.startedAt) / 1000))
       : 0;
-    const status =
-      closedCall.reason === "rejected"
-        ? "declined"
-        : closedCall.reason === "cancelled"
-          ? "missed"
-          : "ended";
-
     saveCallEvent({
       callType: closedCall.callType || "voice",
-      status,
+      status: "ended",
       callerId: isCaller ? currentUser.id : peerId,
       receiverId: isCaller ? peerId : currentUser.id,
       durationSeconds
@@ -512,7 +514,12 @@ export default function App() {
   }
 
   function playIncomingRingtone() {
-    if (!audioUnlockedRef.current) return;
+    console.log("Playing incoming ringtone");
+    if (!audioUnlockedRef.current) {
+      setRingtoneBlocked(true);
+      console.warn("Incoming ringtone failed", "Audio is not unlocked");
+      return;
+    }
     stopOutgoingRingback();
     const audio = getIncomingRingtone();
     try {
@@ -521,11 +528,14 @@ export default function App() {
       const playPromise = audio.play();
       if (playPromise?.catch) {
         playPromise.catch((err) => {
-          console.error("audio.play() error if blocked", err);
+          setRingtoneBlocked(true);
+          console.error("Incoming ringtone failed", err);
         });
       }
+      setRingtoneBlocked(false);
     } catch (err) {
-      console.error("audio.play() error if blocked", err);
+      setRingtoneBlocked(true);
+      console.error("Incoming ringtone failed", err);
       // Browser autoplay policies can block call sounds until the user interacts.
     }
   }
@@ -1392,9 +1402,6 @@ export default function App() {
   async function startWebRtcCall(type) {
     if (!selectedUser) return;
     try {
-      if (!audioUnlockedRef.current) {
-        await unlockCallAudio();
-      }
       await webRtcCall.startCall(selectedUser, type);
     } catch (err) {
       alert(err.message || "Could not start call");
@@ -1413,6 +1420,11 @@ export default function App() {
   function rejectWebRtcCall() {
     stopIncomingRingtone();
     webRtcCall.rejectCall();
+  }
+
+  async function enableIncomingRingtone() {
+    const unlocked = await unlockCallAudio();
+    if (unlocked) playIncomingRingtone();
   }
 
   const unreadNotificationCount = notifications.filter((item) => !item.isRead).length;
@@ -1708,6 +1720,7 @@ export default function App() {
         logs={webRtcCall.logs}
         showDebug={webRtcCall.showDebug}
         audioBlocked={webRtcCall.audioBlocked}
+        ringtoneBlocked={ringtoneBlocked}
         muted={webRtcCall.muted}
         cameraOff={webRtcCall.cameraOff}
         onAccept={acceptWebRtcCall}
@@ -1716,6 +1729,7 @@ export default function App() {
         onToggleMute={webRtcCall.toggleMute}
         onToggleCamera={webRtcCall.toggleCamera}
         onEnableAudio={webRtcCall.enableRemoteAudio}
+        onEnableRingtone={enableIncomingRingtone}
         onToggleDebug={() => webRtcCall.setShowDebug((visible) => !visible)}
         onClearLogs={webRtcCall.clearLogs}
       />
