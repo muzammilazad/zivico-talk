@@ -66,7 +66,9 @@ export function setupSocket(io) {
 
   io.on("connection", (socket) => {
     const user = socket.user;
+    console.log(`[Socket Debug] connected userId=${user.id} socketId=${socket.id}`);
     socket.join(user.id);
+    console.log(`[Socket Debug] joined room=${user.id}`);
     onlineUsers.set(user.id, { socketId: socket.id, user });
     console.log("user joined", user.id);
     emitPresence(io);
@@ -166,13 +168,22 @@ export function setupSocket(io) {
       io.to(String(to)).emit("typing", { from: user.id, name: user.name, isTyping: Boolean(isTyping) });
     });
 
-    socket.on("call-start", async ({ to, callId, callType }, ack) => {
+    socket.on("call-start", async (payload, ack) => {
+      const { to, callId, callType } = payload;
       const receiverId = String(to || "");
       const nextCallId = String(callId || uuid());
       const type = callType || "voice";
       const receiverRoom = io.sockets.adapter.rooms.get(receiverId);
       const receiverSocketIds = receiverRoom ? Array.from(receiverRoom) : [];
 
+      console.log("[Call Debug] CALL_START received payload=", payload);
+      console.log(`[Call Debug] caller userId=${user.id} socketId=${socket.id}`);
+      console.log(`[Call Debug] receiverId=${receiverId}`);
+      console.log("[Call Debug] all rooms=", Array.from(io.sockets.adapter.rooms.keys()));
+      console.log(
+        `[Call Debug] receiver room exists=${Boolean(receiverRoom)} size=${receiverRoom?.size || 0}`
+      );
+      console.log("[Call Debug] receiver socketIds=", receiverSocketIds);
       console.log("CALL_START received", { callId: nextCallId, callerId: user.id, callType: type });
       console.log("Receiver userId", receiverId);
       console.log("Receiver socketId", receiverSocketIds.length ? receiverSocketIds : "offline");
@@ -216,6 +227,7 @@ export function setupSocket(io) {
       }, CALL_TIMEOUT_MS);
 
       activeCalls.set(nextCallId, call);
+      console.log(`[Call Debug] emitting incoming-call to room=${receiverId}`);
       console.log("Emitting incoming-call to receiver", { callId: nextCallId, receiverId });
       io.to(receiverId).emit("incoming-call", {
         callId: nextCallId,
