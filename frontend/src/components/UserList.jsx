@@ -1,4 +1,5 @@
 import { Circle, Headphones } from "lucide-react";
+import { userStatus } from "../lib/userStatus";
 
 function avatarFor(user, apiUrl) {
   if (user.isOfficialSupport || user.role === "support") {
@@ -23,7 +24,6 @@ export default function UserList({
   selectedUser,
   onlineIds,
   unreadCounts,
-  latestMessages,
   pendingRequestCount,
   searchValue,
   onAddContact,
@@ -59,7 +59,7 @@ export default function UserList({
           const isSupport = user.isOfficialSupport || user.role === "support";
           const online = onlineIds.has(user.id) || onlineIds.has(userId);
           const unreadCount = unreadCounts[userId] || 0;
-          const preview = latestMessages[userId] || (online ? "Online" : "Offline");
+          const status = userStatus({ isOnline: online, lastSeenAt: user.lastSeenAt });
 
           return (
             <button
@@ -74,7 +74,7 @@ export default function UserList({
                   {user.name}
                   {isSupport && <span className="support-badge">Official Support</span>}
                 </strong>
-                <small>{preview}</small>
+                <small>{status}</small>
               </span>
               <span className="user-meta">
                 {unreadCount > 0 && <span className="unread-badge">{unreadCount}</span>}

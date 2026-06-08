@@ -23,6 +23,7 @@ import {
   Video,
   X
 } from "lucide-react";
+import { userStatus } from "../lib/userStatus";
 
 const composerEmojis = ["😀", "😃", "😄", "😁", "😂", "😊", "😍", "😘", "😎", "😢", "😭", "😡", "👍", "👎", "🙏", "👏", "❤️", "💔", "🔥", "🎉", "✅", "❌", "📞", "🎥", "🖥️"];
 const reactionEmojis = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
@@ -102,6 +103,7 @@ export default function ChatWindow({
   messages,
   messageText,
   isTyping,
+  isOnline,
   replyToMessage,
   onMessageText,
   onSend,
@@ -356,7 +358,7 @@ export default function ChatWindow({
           {avatarFor(selectedUser, apiUrl)}
           <div>
             <h2>{selectedUser.name}</h2>
-            <p>{isTyping ? `${isTyping.name} is typing...` : selectedUser.online ? "online" : "last seen recently"}</p>
+            <p>{userStatus({ isTyping: Boolean(isTyping), isOnline, lastSeenAt: selectedUser.lastSeenAt })}</p>
           </div>
         </div>
         <div className="chat-actions">

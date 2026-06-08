@@ -788,6 +788,18 @@ export default function App() {
       setOnlineIds(new Set(onlineUsers.map((user) => user.id)));
     }
 
+    function handleLastSeenUpdated({ userId, lastSeenAt }) {
+      if (!userId || !lastSeenAt) return;
+
+      const matchesUser = (user) => String(user.id) === String(userId);
+      setContacts((current) =>
+        current.map((user) => (matchesUser(user) ? { ...user, lastSeenAt } : user))
+      );
+      setSelectedUser((current) =>
+        current && matchesUser(current) ? { ...current, lastSeenAt } : current
+      );
+    }
+
     function handleIncomingMessage(message) {
       console.log("received message", message);
       const normalizedMessage = normalizeMessage(message);
@@ -978,6 +990,7 @@ export default function App() {
 
     socket.on("connect", handleConnect);
     socket.on("presence", handlePresence);
+    socket.on("last-seen-updated", handleLastSeenUpdated);
     socket.on("message-status-updated", handleMessageStatusUpdated);
     socket.on("message-updated", handleMessageUpdated);
     socket.on("message-deleted", handleMessageDeleted);
@@ -1002,6 +1015,7 @@ export default function App() {
     return () => {
       socket.off("connect", handleConnect);
       socket.off("presence", handlePresence);
+      socket.off("last-seen-updated", handleLastSeenUpdated);
       socket.off("private-message", handleIncomingMessage);
       socket.off("receive-message", handleIncomingMessage);
       socket.off("message-status-updated", handleMessageStatusUpdated);
@@ -1927,7 +1941,6 @@ export default function App() {
           selectedUser={selectedUser}
           onlineIds={onlineIds}
           unreadCounts={unreadCounts}
-          latestMessages={latestMessages}
           pendingRequestCount={contactRequests.length}
           searchValue={sidebarSearch}
           onAddContact={() => setShowAddContact(true)}
@@ -1944,6 +1957,7 @@ export default function App() {
             contacts={contacts}
             replyToMessage={replyToMessage}
             isTyping={typingPeer && String(typingPeer.id) === String(selectedUser.id) ? typingPeer : null}
+            isOnline={onlineIds.has(selectedUser.id) || onlineIds.has(String(selectedUser.id))}
             onMessageText={updateMessageDraft}
             onSend={sendMessage}
             onSendMedia={sendMediaMessage}

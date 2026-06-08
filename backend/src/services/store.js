@@ -89,6 +89,13 @@ export async function findUserById(id) {
   return prisma.user.findUnique({ where: { id: String(id) } });
 }
 
+export async function updateUserLastSeen(userId, lastSeenAt = new Date()) {
+  return prisma.user.update({
+    where: { id: String(userId) },
+    data: { lastSeenAt }
+  });
+}
+
 export async function createUser(user) {
   return prisma.user.create({
     data: {

@@ -1,6 +1,12 @@
 import { v4 as uuid } from "uuid";
 import { verifySocketToken } from "./middleware/auth.js";
-import { createNotification, markConversationRead, saveMessage, updateMessageStatus } from "./services/store.js";
+import {
+  createNotification,
+  markConversationRead,
+  saveMessage,
+  updateMessageStatus,
+  updateUserLastSeen
+} from "./services/store.js";
 
 const onlineUsers = new Map();
 
@@ -26,7 +32,13 @@ export function setupSocket(io) {
   io.on("connection", (socket) => {
     const user = socket.user;
     socket.join(user.id);
-    onlineUsers.set(user.id, { socketId: socket.id, user });
+    const currentUser = onlineUsers.get(user.id);
+    if (currentUser) {
+      currentUser.socketIds.add(socket.id);
+      currentUser.user = user;
+    } else {
+      onlineUsers.set(user.id, { socketIds: new Set([socket.id]), user });
+    }
     console.log("user joined", user.id);
     emitPresence(io);
 
@@ -165,12 +177,26 @@ export function setupSocket(io) {
       io.to(to).emit("end-call", { from: user.id, callType: callType || "voice", callStatus });
     });
 
-    socket.on("disconnect", () => {
+    socket.on("disconnect", async () => {
       const current = onlineUsers.get(user.id);
-      if (current?.socketId === socket.id) {
-        onlineUsers.delete(user.id);
-      }
+      if (!current) return;
+
+      current.socketIds.delete(socket.id);
+      if (current.socketIds.size > 0) return;
+
+      onlineUsers.delete(user.id);
       emitPresence(io);
+
+      const lastSeenAt = new Date();
+      try {
+        await updateUserLastSeen(user.id, lastSeenAt);
+        io.emit("last-seen-updated", {
+          userId: String(user.id),
+          lastSeenAt: lastSeenAt.toISOString()
+        });
+      } catch (error) {
+        console.error("failed to update last seen", user.id, error);
+      }
     });
   });
 }
