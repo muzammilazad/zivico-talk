@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { Server } from "socket.io";
 import authRoutes from "./routes/auth.js";
 import adminRoutes from "./routes/admin.js";
+import agoraRoutes from "./routes/agora.js";
 import callEventRoutes from "./routes/callEvents.js";
 import contactRequestRoutes from "./routes/contactRequests.js";
 import contactRoutes from "./routes/contacts.js";
@@ -64,6 +65,7 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.use("/api/auth", authRoutes);
+app.use("/api/agora", agoraRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/contacts", contactRoutes);
 app.use("/api/contact-requests", contactRequestRoutes);
@@ -106,4 +108,5 @@ server.on("error", (error) => {
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Zivico Talk backend listening on port ${PORT}`);
+  console.log("Agora RTC token endpoint ready");
 });

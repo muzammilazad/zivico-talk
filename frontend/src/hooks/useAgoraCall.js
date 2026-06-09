@@ -41,6 +41,7 @@ function normalizeIncomingCall(payload = {}) {
 export default function useAgoraCall({
   socket,
   currentUser,
+  authToken,
   onIncomingCall,
   onOutgoingCall,
   onCallAnswered,
@@ -133,6 +134,7 @@ export default function useAgoraCall({
     await initAgoraCall({
       channelName: activeCall.channelName,
       uid,
+      authToken,
       isVideoCall: activeCall.isVideoCall,
       ...containers,
       onStatus: updateCallStatus,
@@ -144,7 +146,7 @@ export default function useAgoraCall({
         callbacksRef.current.onError?.({ action: "agora", message: error.message });
       }
     });
-  }, [closeCall, currentUser?.id, updateCallStatus, waitForVideoContainers]);
+  }, [authToken, closeCall, currentUser?.id, updateCallStatus, waitForVideoContainers]);
 
   const emitCallEnded = useCallback((activeCall, reason) => {
     if (!socket || !activeCall) return;

@@ -429,6 +429,7 @@ export default function App() {
   const agoraCall = useAgoraCall({
     socket: callSocket,
     currentUser,
+    authToken: session.token,
     onIncomingCall: handleNewIncomingCall,
     onOutgoingCall: playOutgoingRingback,
     onCallAnswered: stopCallSounds,

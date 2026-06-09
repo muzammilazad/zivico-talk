@@ -1,5 +1,6 @@
 import AgoraRTC from "agora-rtc-sdk-ng";
 import { AGORA_APP_ID, hasValidAgoraAppId } from "../config/agoraConfig";
+import { api } from "../lib/api";
 import { isValidAgoraChannelName } from "../utils/agoraChannel";
 
 let client = null;
@@ -15,8 +16,11 @@ function log(message, details) {
 
 function friendlyAgoraError(error) {
   const message = error?.message || String(error);
+  if (message === "Unable to get Agora token from server.") {
+    return new Error(message);
+  }
   if (/token|certificate|dynamic key/i.test(message)) {
-    return new Error("This App ID is still token/certificate enabled. Use a tokenless Agora project App ID.");
+    return new Error("Unable to join Agora with the server token.");
   }
   if (/permission|notallowed|denied|device/i.test(message)) {
     return new Error("Microphone or camera permission denied");
@@ -27,6 +31,7 @@ function friendlyAgoraError(error) {
 export async function initAgoraCall({
   channelName,
   uid,
+  authToken,
   isVideoCall,
   localVideoContainer,
   remoteVideoContainer,
@@ -53,8 +58,7 @@ export async function initAgoraCall({
   try {
     console.log("Agora Web App ID loaded:", Boolean(AGORA_APP_ID));
     console.log("Agora Web App ID:", AGORA_APP_ID ? `${AGORA_APP_ID.substring(0, 6)}...` : "missing");
-    console.log("Agora Web token mode: demo tokenless");
-    console.log("Agora Web token value: null");
+    console.log("Agora Web token mode: server RTC token");
     console.log("Agora Web channelName:", channelName);
     console.log("Agora Web uid:", uid);
     log("isVideoCall", isVideoCall);
@@ -105,11 +109,26 @@ export async function initAgoraCall({
       assertCallIsActive();
     }
 
+    log("fetching RTC token");
+    let tokenFromServer;
+    try {
+      const tokenResponse = await api(
+        `/api/agora/rtc-token?channelName=${encodeURIComponent(channelName)}&uid=${encodeURIComponent(uid)}`,
+        {},
+        authToken
+      );
+      tokenFromServer = String(tokenResponse?.token || "").trim();
+      if (!tokenFromServer) throw new Error();
+    } catch {
+      throw new Error("Unable to get Agora token from server.");
+    }
+    assertCallIsActive();
+    console.log("Agora Web token loaded:", Boolean(tokenFromServer));
+
     log("joining channel");
-    // Demo only: tokenless Agora project / App ID only mode.
-    // Production must use a token server.
+    // The App Certificate stays on the backend token server.
     // Do not put App Certificate in web frontend.
-    await client.join(AGORA_APP_ID, channelName, null, uid);
+    await client.join(AGORA_APP_ID, channelName, tokenFromServer, uid);
     assertCallIsActive();
     log("joined channel");
 

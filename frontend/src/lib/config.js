@@ -8,13 +8,15 @@ function isMissingBackendUrl(value) {
   return !value || value === PLACEHOLDER_BACKEND_URL;
 }
 
-export const API_BASE_URL = normalizeUrl(import.meta.env.VITE_API_URL);
+export const API_BASE_URL = normalizeUrl(
+  import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL
+);
 export const SOCKET_URL = normalizeUrl(import.meta.env.VITE_SOCKET_URL);
 
 export function assertApiBaseUrl() {
   if (isMissingBackendUrl(API_BASE_URL)) {
     throw new Error(
-      "VITE_API_URL must be set to your live backend URL."
+      "VITE_API_BASE_URL or VITE_API_URL must be set to your live backend URL."
     );
   }
 }

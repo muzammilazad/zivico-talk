@@ -25,5 +25,6 @@ export function isValidAgoraChannelName(channelName) {
 }
 
 export function agoraUidFromUserId(userId) {
-  return (Math.abs(hashString(String(userId))) % 1000000) + 1;
+  // Keep web UIDs outside the mobile app's 1..1,000,000 range.
+  return (Math.abs(hashString(String(userId))) % 1000000) + 1000001;
 }

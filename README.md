@@ -80,7 +80,7 @@ Add the same Agora App ID used by the Flutter app to `frontend/.env`:
 VITE_AGORA_APP_ID="a84361a1dca0421dafc488d41619a153"
 ```
 
-For tokenless demo testing, the Agora project must have App Certificate disabled. Production deployments should use an Agora token server.
+Agora calls use RTC tokens issued by the backend. Keep the App Certificate only in the backend environment.
 
 ## Testing With Two Users
 
@@ -124,7 +124,7 @@ Uploaded files are stored in `backend/uploads/` and served from `/uploads/:filen
 - `CORS issue`: make sure `FRONTEND_URL` matches the frontend URL, usually `http://localhost:5173`.
 - Prisma client errors: run `npm run prisma:generate` after changing `prisma/schema.prisma`.
 - `Agora App ID missing`: set `VITE_AGORA_APP_ID` in `frontend/.env` to the Flutter app's App ID.
-- `Agora token required`: disable App Certificate for demo testing or add a token server and pass tokens on web and mobile.
+- `Unable to get Agora token from server`: verify the backend Agora environment variables and deployment.
 - Calls ring but media does not connect: confirm both clients received the exact same `channelName`, use different UIDs, and use the same token mode.
 
 ## Same Network Testing
