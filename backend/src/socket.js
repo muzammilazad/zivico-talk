@@ -168,36 +168,37 @@ export function setupSocket(io) {
       io.to(String(to)).emit("typing", { from: user.id, name: user.name, isTyping: Boolean(isTyping) });
     });
 
-    socket.on("call-start", async (payload, ack) => {
-      const { to, callId, callType } = payload;
-      const receiverId = String(to || "");
-      const nextCallId = String(callId || uuid());
-      const type = callType || "voice";
+    socket.on("incoming_call", async (payload, ack) => {
+      const receiverId = String(payload.to || payload.receiverId || "");
+      const channelName = String(payload.channelName || "");
+      const callType = payload.callType || (payload.isVideoCall ? "video" : "voice");
+      const isVideoCall = callType === "video" || payload.isVideoCall === true;
+      const nextCallId = String(payload.callId || uuid());
       const receiverRoom = io.sockets.adapter.rooms.get(receiverId);
-      const receiverSocketIds = receiverRoom ? Array.from(receiverRoom) : [];
 
-      console.log("[Call Debug] CALL_START received payload=", payload);
-      console.log(`[Call Debug] caller userId=${user.id} socketId=${socket.id}`);
-      console.log(`[Call Debug] receiverId=${receiverId}`);
-      console.log("[Call Debug] all rooms=", Array.from(io.sockets.adapter.rooms.keys()));
-      console.log(
-        `[Call Debug] receiver room exists=${Boolean(receiverRoom)} size=${receiverRoom?.size || 0}`
-      );
-      console.log("[Call Debug] receiver socketIds=", receiverSocketIds);
-      console.log("CALL_START received", { callId: nextCallId, callerId: user.id, callType: type });
-      console.log("Receiver userId", receiverId);
-      console.log("Receiver socketId", receiverSocketIds.length ? receiverSocketIds : "offline");
+      console.log("incoming_call received", {
+        callId: nextCallId,
+        callerId: user.id,
+        receiverId,
+        channelName,
+        callType
+      });
+
+      if (!channelName || !/^[A-Za-z0-9]{1,50}$/.test(channelName)) {
+        ack?.({ ok: false, callId: nextCallId, reason: "invalid-channel" });
+        return;
+      }
 
       if (!receiverId || !receiverRoom?.size) {
-        console.log("Receiver not online, creating missed call", { callId: nextCallId, receiverId });
         const offlineCall = {
           callId: nextCallId,
           callerId: user.id,
           receiverId,
-          callType: type
+          channelName,
+          callType,
+          isVideoCall
         };
         if (receiverId) await createCallEventAndNotify(io, offlineCall, "missed");
-        socket.emit("call-unavailable", { callId: nextCallId, reason: "offline" });
         ack?.({ ok: false, callId: nextCallId, reason: "offline" });
         return;
       }
@@ -206,7 +207,9 @@ export function setupSocket(io) {
         callId: nextCallId,
         callerId: user.id,
         receiverId,
-        callType: type,
+        channelName,
+        callType,
+        isVideoCall,
         answered: false,
         timeout: null
       };
@@ -217,66 +220,60 @@ export function setupSocket(io) {
           if (!activeCall || activeCall.answered) return;
 
           activeCalls.delete(nextCallId);
-          console.log("Call timeout, creating missed call", { callId: nextCallId });
           await createCallEventAndNotify(io, activeCall, "missed");
-          io.to(String(activeCall.callerId)).emit("call-timeout", { callId: nextCallId });
-          io.to(String(activeCall.receiverId)).emit("call-timeout", { callId: nextCallId });
+          const timeoutPayload = {
+            callId: nextCallId,
+            channelName: activeCall.channelName,
+            callType: activeCall.callType,
+            isVideoCall: activeCall.isVideoCall,
+            reason: "timeout"
+          };
+          io.to(String(activeCall.callerId)).emit("call_ended", timeoutPayload);
+          io.to(String(activeCall.receiverId)).emit("call_ended", timeoutPayload);
         } catch (error) {
           console.error("Call timeout handling failed", error);
         }
       }, CALL_TIMEOUT_MS);
 
       activeCalls.set(nextCallId, call);
-      console.log(`[Call Debug] emitting incoming-call to room=${receiverId}`);
-      console.log("Emitting incoming-call to receiver", { callId: nextCallId, receiverId });
-      io.to(receiverId).emit("incoming-call", {
+      io.to(receiverId).emit("incoming_call", {
         callId: nextCallId,
+        channelName,
         from: user.id,
+        callerId: user.id,
+        callerName: user.name,
+        receiverId,
         fromUser: { id: user.id, name: user.name, email: user.email },
-        callType: type,
+        callType,
+        isVideoCall,
         timeoutMs: CALL_TIMEOUT_MS
       });
-      ack?.({ ok: true, callId: nextCallId });
+      ack?.({ ok: true, callId: nextCallId, timeoutMs: CALL_TIMEOUT_MS });
     });
 
-    socket.on("call-offer", ({ to, callId, offer, callType }) => {
-      if (!to || !offer) return;
-      io.to(String(to)).emit("call-offer", {
-        callId,
-        from: user.id,
-        fromUser: { id: user.id, name: user.name, email: user.email },
-        offer,
-        callType: callType || "voice"
-      });
-    });
-
-    socket.on("call-answer", ({ to, callId, answer, callType }) => {
-      if (!to || !answer) return;
+    socket.on("call_answered", (payload = {}) => {
+      const to = payload.to || payload.callerId;
+      const callId = payload.callId || payload.channelName;
+      if (!to || !callId) return;
       const call = activeCalls.get(String(callId || ""));
       if (call) {
         call.answered = true;
         clearCallTimeout(call);
         activeCalls.set(call.callId, call);
       }
-      io.to(String(to)).emit("call-answer", {
+      io.to(String(to)).emit("call_answered", {
         callId,
+        channelName: payload.channelName || call?.channelName,
         from: user.id,
-        answer,
-        callType: callType || "voice"
+        receiverId: user.id,
+        callType: payload.callType || call?.callType || "voice",
+        isVideoCall: payload.isVideoCall ?? call?.isVideoCall ?? false
       });
     });
 
-    socket.on("ice-candidate", ({ to, callId, candidate, callType }) => {
-      if (!to || !candidate) return;
-      io.to(String(to)).emit("ice-candidate", {
-        callId,
-        from: user.id,
-        candidate,
-        callType: callType || "voice"
-      });
-    });
-
-    socket.on("call-reject", async ({ to, callId, callType }) => {
+    socket.on("call_rejected", async (payload = {}) => {
+      const to = payload.to || payload.callerId;
+      const callId = payload.callId || payload.channelName;
       if (!to) return;
       const call = activeCalls.get(String(callId || ""));
       if (call) {
@@ -284,14 +281,20 @@ export function setupSocket(io) {
         activeCalls.delete(call.callId);
         await createCallEventAndNotify(io, call, "declined");
       }
-      io.to(String(to)).emit("call-reject", {
+      io.to(String(to)).emit("call_rejected", {
         callId,
+        channelName: payload.channelName || call?.channelName,
         from: user.id,
-        callType: callType || "voice"
+        callType: payload.callType || call?.callType || "voice",
+        isVideoCall: payload.isVideoCall ?? call?.isVideoCall ?? false,
+        reason: payload.reason || "rejected"
       });
     });
 
-    socket.on("call-end", async ({ to, callId, callType }) => {
+    socket.on("call_ended", async (payload = {}) => {
+      const to = payload.to ||
+        (String(payload.callerId) === String(user.id) ? payload.receiverId : payload.callerId);
+      const callId = payload.callId || payload.channelName;
       if (!to) return;
       const call = activeCalls.get(String(callId || ""));
       if (call) {
@@ -301,10 +304,13 @@ export function setupSocket(io) {
           await createCallEventAndNotify(io, call, "missed");
         }
       }
-      io.to(String(to)).emit("call-end", {
+      io.to(String(to)).emit("call_ended", {
         callId,
+        channelName: payload.channelName || call?.channelName,
         from: user.id,
-        callType: callType || "voice"
+        callType: payload.callType || call?.callType || "voice",
+        isVideoCall: payload.isVideoCall ?? call?.isVideoCall ?? false,
+        reason: payload.reason || "ended"
       });
     });
 
@@ -323,23 +329,29 @@ export function setupSocket(io) {
       const remainingUserSockets = io.sockets.adapter.rooms.get(String(user.id));
       if (!remainingUserSockets?.size) {
         for (const [callId, call] of activeCalls) {
-          if (call.answered || (call.callerId !== user.id && call.receiverId !== user.id)) continue;
+          const isCaller = String(call.callerId) === String(user.id);
+          const isReceiver = String(call.receiverId) === String(user.id);
+          if (!isCaller && !isReceiver) continue;
 
           clearCallTimeout(call);
           activeCalls.delete(callId);
-          if (call.callerId === user.id) {
+          const otherUserId = isCaller ? call.receiverId : call.callerId;
+          if (!call.answered) {
             console.log("Receiver not online, creating missed call", {
               callId,
               receiverId: call.receiverId,
-              reason: "caller-disconnected"
+              reason: isCaller ? "caller-disconnected" : "receiver-disconnected"
             });
             createCallEventAndNotify(io, call, "missed").catch(console.error);
-            io.to(String(call.receiverId)).emit("call-end", {
-              callId,
-              from: user.id,
-              callType: call.callType
-            });
           }
+          io.to(String(otherUserId)).emit("call_ended", {
+            callId,
+            channelName: call.channelName,
+            from: user.id,
+            callType: call.callType,
+            isVideoCall: call.isVideoCall,
+            reason: "peer-disconnected"
+          });
         }
       }
       emitPresence(io);

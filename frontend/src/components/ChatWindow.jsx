@@ -9,7 +9,6 @@ import {
   Forward,
   Image,
   Mic,
-  MonitorUp,
   MoreVertical,
   Paperclip,
   Phone,
@@ -369,9 +368,6 @@ export default function ChatWindow({
           </button>
           <button title="Video call" type="button" onClick={() => onStartCall("video")}>
             <Video size={20} />
-          </button>
-          <button title="Share screen" type="button" onClick={() => onStartCall("screen")}>
-            <MonitorUp size={20} />
           </button>
         </div>
       </header>

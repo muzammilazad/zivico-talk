@@ -1,6 +1,6 @@
 # Zivico Talk
 
-Private WhatsApp-like communication app with React, Vite, Node.js, Express, Socket.IO, JWT auth, MySQL/Prisma persistence, uploads, media messages, voice notes, and browser WebRTC calls.
+Private WhatsApp-like communication app with React, Vite, Node.js, Express, Socket.IO, JWT auth, MySQL/Prisma persistence, uploads, media messages, voice notes, and Agora voice/video calls.
 
 ## Features
 
@@ -10,7 +10,7 @@ Private WhatsApp-like communication app with React, Vite, Node.js, Express, Sock
 - Unread badges and online/offline presence
 - Image, file, and voice-note messages
 - Profile avatar uploads
-- Voice calls, video calls, and screen sharing
+- Cross-platform Agora voice and video calls
 - Call events in the chat timeline
 
 ## Backend Setup
@@ -74,6 +74,14 @@ npm run dev
 
 Open `http://localhost:5173`.
 
+Add the same Agora App ID used by the Flutter app to `frontend/.env`:
+
+```env
+VITE_AGORA_APP_ID="YOUR_AGORA_APP_ID"
+```
+
+For tokenless demo testing, the Agora project must have App Certificate disabled. Production deployments should use an Agora token server.
+
 ## Testing With Two Users
 
 1. Register user 1.
@@ -81,7 +89,7 @@ Open `http://localhost:5173`.
 3. User 1 searches user 2 by email or phone and sends a contact request.
 4. User 2 accepts the request.
 5. Send text, image, file, and voice-note messages.
-6. Try voice, video, and screen-share calls.
+6. Try voice and video calls between web and Flutter using the same Agora App ID.
 7. Refresh the browser and restart the backend to confirm history persists in MySQL.
 
 ## API Highlights
@@ -115,6 +123,9 @@ Uploaded files are stored in `backend/uploads/` and served from `/uploads/:filen
 - `uploads folder missing`: the backend creates `backend/uploads/` automatically on start/upload.
 - `CORS issue`: make sure `FRONTEND_URL` matches the frontend URL, usually `http://localhost:5173`.
 - Prisma client errors: run `npm run prisma:generate` after changing `prisma/schema.prisma`.
+- `Agora App ID missing`: set `VITE_AGORA_APP_ID` in `frontend/.env` to the Flutter app's App ID.
+- `Agora token required`: disable App Certificate for demo testing or add a token server and pass tokens on web and mobile.
+- Calls ring but media does not connect: confirm both clients received the exact same `channelName`, use different UIDs, and use the same token mode.
 
 ## Same Network Testing
 
@@ -125,4 +136,4 @@ On another device on the same network:
 - Set `frontend/.env` to `VITE_API_URL=http://YOUR_COMPUTER_LAN_IP:4000`
 - Open `http://YOUR_COMPUTER_LAN_IP:5173`
 
-Browsers may require HTTPS for camera and screen sharing outside `localhost`.
+Browsers require HTTPS for microphone and camera access outside `localhost`.

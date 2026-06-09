@@ -37,7 +37,7 @@ export default function AuthPanel({ onAuth }) {
           </span>
           <div>
             <h1>Zee Talk</h1>
-            <p>Private chats and local WebRTC calls.</p>
+            <p>Private chats with cross-platform Agora voice and video calls.</p>
           </div>
         </div>
 

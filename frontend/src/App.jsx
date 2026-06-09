@@ -18,8 +18,8 @@ import {
 import AuthPanel from "./components/AuthPanel";
 import ChatWindow from "./components/ChatWindow";
 import UserList from "./components/UserList";
-import WebRTCCallModal from "./components/WebRTCCallModal";
-import useWebRTCCall from "./hooks/useWebRTCCall";
+import AgoraCallScreen from "./components/AgoraCallScreen";
+import useAgoraCall from "./hooks/useAgoraCall";
 import { api } from "./lib/api";
 import { API_BASE_URL } from "./lib/config";
 import { createSocket } from "./lib/socket";
@@ -51,9 +51,11 @@ function normalizeIncomingCallPayload(payload = {}) {
   };
 
   return {
+    ...payload,
     from: payload.from || payload.callerId || fromUser.id,
     fromUser,
-    callType: payload.callType || "voice"
+    callType: payload.callType || (payload.isVideoCall ? "video" : "voice"),
+    isVideoCall: payload.isVideoCall === true || payload.callType === "video"
   };
 }
 
@@ -424,7 +426,7 @@ export default function App() {
   const serviceWorkerRegistrationRef = useRef(null);
 
   const currentUser = session.user;
-  const webRtcCall = useWebRTCCall({
+  const agoraCall = useAgoraCall({
     socket: callSocket,
     currentUser,
     onIncomingCall: handleNewIncomingCall,
@@ -594,8 +596,8 @@ export default function App() {
         // Audio unlock is still valid for this page even if storage is unavailable.
       }
       console.log("Call audio unlocked");
-      await webRtcCall.enableRemoteAudio();
-      if (webRtcCall.incomingCall && !webRtcCall.call) {
+      await agoraCall.enableRemoteAudio();
+      if (agoraCall.incomingCall && !agoraCall.call) {
         playIncomingRingtone();
       }
       return true;
@@ -1066,7 +1068,7 @@ export default function App() {
   }
 
   function logout() {
-    webRtcCall.endCall();
+    agoraCall.endCall();
     setSession(emptySession);
     setContacts([]);
     setContactRequests([]);
@@ -1399,27 +1401,27 @@ export default function App() {
     setTimeout(() => setToast(""), 2200);
   }
 
-  async function startWebRtcCall(type) {
+  async function startAgoraCall(type) {
     if (!selectedUser) return;
     try {
-      await webRtcCall.startCall(selectedUser, type);
+      await agoraCall.startCall(selectedUser, type);
     } catch (err) {
       alert(err.message || "Could not start call");
     }
   }
 
-  async function acceptWebRtcCall() {
+  async function acceptAgoraCall() {
     stopIncomingRingtone();
     try {
-      await webRtcCall.acceptCall();
+      await agoraCall.acceptCall();
     } catch (err) {
       alert(err.message || "Could not accept call");
     }
   }
 
-  function rejectWebRtcCall() {
+  function rejectAgoraCall() {
     stopIncomingRingtone();
-    webRtcCall.rejectCall();
+    agoraCall.rejectCall();
   }
 
   async function enableIncomingRingtone() {
@@ -1579,7 +1581,7 @@ export default function App() {
             onReplyToMessage={setReplyToMessage}
             onCancelReply={() => setReplyToMessage(null)}
             onForwardMessage={forwardMessage}
-            onStartCall={startWebRtcCall}
+            onStartCall={startAgoraCall}
             onBack={() => setSelectedUser(null)}
             apiUrl={API_BASE_URL}
           />
@@ -1711,27 +1713,22 @@ export default function App() {
         </button>
       </nav>
       {toast && <div className="toast">{toast}</div>}
-      <WebRTCCallModal
-        call={webRtcCall.call}
-        incomingCall={webRtcCall.incomingCall}
-        localVideoRef={webRtcCall.localVideoRef}
-        remoteVideoRef={webRtcCall.remoteVideoRef}
-        remoteAudioRef={webRtcCall.remoteAudioRef}
-        logs={webRtcCall.logs}
-        showDebug={webRtcCall.showDebug}
-        audioBlocked={webRtcCall.audioBlocked}
+      <AgoraCallScreen
+        call={agoraCall.call}
+        incomingCall={agoraCall.incomingCall}
+        localVideoRef={agoraCall.localVideoRef}
+        remoteVideoRef={agoraCall.remoteVideoRef}
+        audioBlocked={agoraCall.audioBlocked}
         ringtoneBlocked={ringtoneBlocked}
-        muted={webRtcCall.muted}
-        cameraOff={webRtcCall.cameraOff}
-        onAccept={acceptWebRtcCall}
-        onReject={rejectWebRtcCall}
-        onEnd={webRtcCall.endCall}
-        onToggleMute={webRtcCall.toggleMute}
-        onToggleCamera={webRtcCall.toggleCamera}
-        onEnableAudio={webRtcCall.enableRemoteAudio}
+        muted={agoraCall.muted}
+        cameraOff={agoraCall.cameraOff}
+        onAccept={acceptAgoraCall}
+        onReject={rejectAgoraCall}
+        onEnd={agoraCall.endCall}
+        onToggleMute={agoraCall.toggleMute}
+        onToggleCamera={agoraCall.toggleCamera}
+        onEnableAudio={agoraCall.enableRemoteAudio}
         onEnableRingtone={enableIncomingRingtone}
-        onToggleDebug={() => webRtcCall.setShowDebug((visible) => !visible)}
-        onClearLogs={webRtcCall.clearLogs}
       />
 
       {showAddContact && (
