@@ -16,7 +16,7 @@ function log(message, details) {
 function friendlyAgoraError(error) {
   const message = error?.message || String(error);
   if (/token|certificate|dynamic key/i.test(message)) {
-    return new Error("Agora token required. For demo, use tokenless Agora project or add token server.");
+    return new Error("This App ID is still token/certificate enabled. Use a tokenless Agora project App ID.");
   }
   if (/permission|notallowed|denied|device/i.test(message)) {
     return new Error("Microphone or camera permission denied");
@@ -51,9 +51,12 @@ export async function initAgoraCall({
   };
 
   try {
-    log("Agora App ID valid", true);
-    log("channelName", channelName);
-    log("Agora Web UID", uid);
+    console.log("Agora Web App ID loaded:", Boolean(AGORA_APP_ID));
+    console.log("Agora Web App ID:", AGORA_APP_ID ? `${AGORA_APP_ID.substring(0, 6)}...` : "missing");
+    console.log("Agora Web token mode: demo tokenless");
+    console.log("Agora Web token value: null");
+    console.log("Agora Web channelName:", channelName);
+    console.log("Agora Web uid:", uid);
     log("isVideoCall", isVideoCall);
     log("creating client");
 
@@ -103,6 +106,9 @@ export async function initAgoraCall({
     }
 
     log("joining channel");
+    // Demo only: tokenless Agora project / App ID only mode.
+    // Production must use a token server.
+    // Do not put App Certificate in web frontend.
     await client.join(AGORA_APP_ID, channelName, null, uid);
     assertCallIsActive();
     log("joined channel");

@@ -77,7 +77,7 @@ Open `http://localhost:5173`.
 Add the same Agora App ID used by the Flutter app to `frontend/.env`:
 
 ```env
-VITE_AGORA_APP_ID="YOUR_AGORA_APP_ID"
+VITE_AGORA_APP_ID="a84361a1dca0421dafc488d41619a153"
 ```
 
 For tokenless demo testing, the Agora project must have App Certificate disabled. Production deployments should use an Agora token server.
