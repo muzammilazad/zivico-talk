@@ -67,7 +67,11 @@ router.post("/register", async (req, res) => {
     });
     await ensureSupportContactForUser(user);
 
-    const { passwordHash: _passwordHash, ...safeUser } = user;
+    const {
+      passwordHash: _passwordHash,
+      fcmToken: _fcmToken,
+      ...safeUser
+    } = user;
     return res.status(201).json({ token: signToken(user), user: safeUser });
   } catch (error) {
     return handleAuthError(res, error);

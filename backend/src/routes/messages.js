@@ -1,5 +1,6 @@
 import express from "express";
 import { authRequired } from "../middleware/auth.js";
+import { sendMessagePush } from "../services/fcmService.js";
 import {
   deleteMessageReaction,
   deleteMessage,
@@ -7,6 +8,7 @@ import {
   findMessageForUser,
   forwardMessage,
   getConversation,
+  getUserPushTarget,
   upsertMessageReaction
 } from "../services/store.js";
 
@@ -56,6 +58,34 @@ router.post("/:messageId/forward", authRequired, async (req, res) => {
       io?.to(String(message.senderId)).emit("private-message", message);
       io?.to(String(message.senderId)).emit("message-status-updated", message);
     });
+
+    await Promise.all(
+      messages.map(async (message) => {
+        try {
+          const receiver = await getUserPushTarget(message.receiverId);
+          if (!receiver?.fcmToken || !receiver.notifyMessages) return;
+
+          await sendMessagePush({
+            fcmToken: receiver.fcmToken,
+            senderName: req.user.name,
+            senderId: req.user.id,
+            receiverId: message.receiverId,
+            chatId: req.user.id,
+            message:
+              message.text ||
+              message.mediaName ||
+              message.type ||
+              "New message"
+          });
+        } catch (error) {
+          console.error("FCM forwarded message push failed", {
+            messageId: message.id,
+            receiverId: message.receiverId,
+            message: error.message
+          });
+        }
+      })
+    );
 
     return res.status(201).json(messages);
   } catch (err) {

@@ -1,7 +1,12 @@
 import { v4 as uuid } from "uuid";
 import { verifySocketToken } from "./middleware/auth.js";
 import {
+  sendIncomingCallPush,
+  sendMessagePush
+} from "./services/fcmService.js";
+import {
   createNotification,
+  getUserPushTarget,
   markConversationRead,
   saveCallEvent,
   saveMessage,
@@ -11,6 +16,65 @@ import {
 const onlineUsers = new Map();
 const activeCalls = new Map();
 const CALL_TIMEOUT_MS = 30_000;
+
+async function pushMessageToReceiver({
+  sender,
+  receiverId,
+  messageText,
+  chatId
+}) {
+  if (!receiverId || String(sender.id) === String(receiverId)) return;
+
+  try {
+    const receiver = await getUserPushTarget(receiverId);
+    if (!receiver?.fcmToken || !receiver.notifyMessages) return;
+
+    await sendMessagePush({
+      fcmToken: receiver.fcmToken,
+      senderName: sender.name,
+      senderId: sender.id,
+      receiverId,
+      chatId,
+      message: messageText
+    });
+  } catch (error) {
+    console.error("FCM message push failed", {
+      receiverId,
+      message: error.message
+    });
+  }
+}
+
+async function pushIncomingCallToReceiver({
+  caller,
+  receiverId,
+  callId,
+  channelName,
+  isVideoCall
+}) {
+  if (!receiverId || String(caller.id) === String(receiverId)) return;
+
+  try {
+    const receiver = await getUserPushTarget(receiverId);
+    if (!receiver?.fcmToken || !receiver.notifyCalls) return;
+
+    await sendIncomingCallPush({
+      fcmToken: receiver.fcmToken,
+      callerName: caller.name,
+      callerId: caller.id,
+      receiverId,
+      callId,
+      channelName,
+      isVideoCall
+    });
+  } catch (error) {
+    console.error("FCM incoming call push failed", {
+      callId,
+      receiverId,
+      message: error.message
+    });
+  }
+}
 
 export function getOnlineUserCount() {
   return onlineUsers.size;
@@ -131,6 +195,13 @@ export function setupSocket(io) {
       });
       io.to(receiverRoom).emit("notification-created", notification);
 
+      await pushMessageToReceiver({
+        sender: user,
+        receiverId,
+        messageText: messageText || mediaName || messageType,
+        chatId: user.id
+      });
+
       socket.emit("private-message", payload);
       socket.emit("message-status-updated", payload);
       ack?.({ ok: true, message: payload });
@@ -188,6 +259,14 @@ export function setupSocket(io) {
         ack?.({ ok: false, callId: nextCallId, reason: "invalid-channel" });
         return;
       }
+
+      await pushIncomingCallToReceiver({
+        caller: user,
+        receiverId,
+        callId: nextCallId,
+        channelName,
+        isVideoCall
+      });
 
       if (!receiverId || !receiverRoom?.size) {
         const offlineCall = {

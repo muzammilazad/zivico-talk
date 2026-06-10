@@ -14,6 +14,7 @@ model User {
   phone        String?  @unique
   passwordHash String
   avatarUrl    String?
+  fcmToken     String?  @db.Text
   role         String   @default("client")
   isSystem     Boolean  @default(false)
   isBlocked    Boolean  @default(false)

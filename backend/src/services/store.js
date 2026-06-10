@@ -12,7 +12,7 @@ const messageInclude = {
 
 function publicUser(user) {
   if (!user) return null;
-  const { passwordHash, ...safeUser } = user;
+  const { passwordHash, fcmToken, ...safeUser } = user;
   safeUser.role = safeUser.role === "user" ? "client" : safeUser.role || "client";
   safeUser.isAdmin = safeUser.role === "admin";
   safeUser.isSupport = safeUser.role === "support";
@@ -87,6 +87,27 @@ export async function findUserByPhone(phone) {
 
 export async function findUserById(id) {
   return prisma.user.findUnique({ where: { id: String(id) } });
+}
+
+export async function updateUserFcmToken(userId, fcmToken) {
+  return prisma.user.update({
+    where: { id: String(userId) },
+    data: { fcmToken: String(fcmToken) },
+    select: { id: true }
+  });
+}
+
+export async function getUserPushTarget(userId) {
+  return prisma.user.findUnique({
+    where: { id: String(userId) },
+    select: {
+      id: true,
+      name: true,
+      fcmToken: true,
+      notifyMessages: true,
+      notifyCalls: true
+    }
+  });
 }
 
 export async function createUser(user) {
