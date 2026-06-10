@@ -1,6 +1,9 @@
 import AgoraRTC from "agora-rtc-sdk-ng";
-import { AGORA_APP_ID, hasValidAgoraAppId } from "../config/agoraConfig";
-import { api } from "../lib/api";
+import {
+  AGORA_APP_ID,
+  API_BASE_URL,
+  hasValidAgoraAppId
+} from "../config/agoraConfig";
 import { isValidAgoraChannelName } from "../utils/agoraChannel";
 
 let client = null;
@@ -28,10 +31,40 @@ function friendlyAgoraError(error) {
   return error instanceof Error ? error : new Error(message);
 }
 
+async function fetchAgoraToken(channelName, uid) {
+  const url = `${API_BASE_URL}/api/agora/rtc-token?channelName=${encodeURIComponent(
+    channelName
+  )}&uid=${encodeURIComponent(uid)}`;
+
+  console.log("Agora token URL:", url);
+
+  const response = await fetch(url);
+  const text = await response.text();
+
+  console.log("Agora token response status:", response.status);
+  console.log("Agora token response body:", text);
+
+  if (!response.ok) {
+    throw new Error(`Unable to get Agora token from server: ${text}`);
+  }
+
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error("Agora token server returned invalid JSON");
+  }
+
+  if (!data.token) {
+    throw new Error("Agora token missing from server response");
+  }
+
+  return data.token;
+}
+
 export async function initAgoraCall({
   channelName,
   uid,
-  authToken,
   isVideoCall,
   localVideoContainer,
   remoteVideoContainer,
@@ -110,18 +143,7 @@ export async function initAgoraCall({
     }
 
     log("fetching RTC token");
-    let tokenFromServer;
-    try {
-      const tokenResponse = await api(
-        `/api/agora/rtc-token?channelName=${encodeURIComponent(channelName)}&uid=${encodeURIComponent(uid)}`,
-        {},
-        authToken
-      );
-      tokenFromServer = String(tokenResponse?.token || "").trim();
-      if (!tokenFromServer) throw new Error();
-    } catch {
-      throw new Error("Unable to get Agora token from server.");
-    }
+    const tokenFromServer = await fetchAgoraToken(channelName, uid);
     assertCallIsActive();
     console.log("Agora Web token loaded:", Boolean(tokenFromServer));
 

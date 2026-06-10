@@ -1,6 +1,5 @@
 import agoraToken from "agora-token";
 import express from "express";
-import { authRequired } from "../middleware/auth.js";
 
 const { RtcTokenBuilder, RtcRole } = agoraToken;
 const router = express.Router();
@@ -14,6 +13,13 @@ export function createRtcToken(req, res) {
     ).trim();
     const channelName = String(req.query.channelName || "");
     const numericUid = Number(req.query.uid);
+
+    console.log("Agora token request:", {
+      channelName,
+      uid: req.query.uid
+    });
+    console.log("Agora App ID loaded:", Boolean(appId));
+    console.log("Agora Certificate loaded:", Boolean(appCertificate));
 
     if (!appId || !appCertificate) {
       return res.status(500).json({ error: "Agora server config missing" });
@@ -44,6 +50,7 @@ export function createRtcToken(req, res) {
     );
 
     return res.json({
+      appId,
       token,
       channelName,
       uid: numericUid,
@@ -55,6 +62,8 @@ export function createRtcToken(req, res) {
   }
 }
 
-router.get("/rtc-token", authRequired, createRtcToken);
+// This endpoint is public so web and mobile clients can obtain a short-lived
+// Agora token before joining a channel.
+router.get("/rtc-token", createRtcToken);
 
 export default router;
