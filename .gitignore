@@ -19,6 +19,8 @@ backend/.env.production
 frontend/.env
 frontend/.env.local
 frontend/.env.production
+firebase-service-account.json
+*.private.json
 
 # logs
 *.log

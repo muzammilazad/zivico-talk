@@ -2,6 +2,7 @@ import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getMessaging } from "firebase-admin/messaging";
 
 let warnedAboutMissingConfig = false;
+let firebaseInitialized = false;
 
 function getFirebaseApp() {
   const projectId = String(process.env.FIREBASE_PROJECT_ID || "").trim();
@@ -20,12 +21,21 @@ function getFirebaseApp() {
     return null;
   }
 
-  return (
-    getApps()[0] ||
-    initializeApp({
-      credential: cert({ projectId, clientEmail, privateKey })
-    })
-  );
+  const existingApp = getApps()[0];
+  if (existingApp) {
+    if (!firebaseInitialized) {
+      console.log("Firebase Admin initialized");
+      firebaseInitialized = true;
+    }
+    return existingApp;
+  }
+
+  const app = initializeApp({
+    credential: cert({ projectId, clientEmail, privateKey })
+  });
+  console.log("Firebase Admin initialized");
+  firebaseInitialized = true;
+  return app;
 }
 
 function stringifyData(data = {}) {
@@ -47,22 +57,41 @@ export async function sendPushNotification({
   const app = getFirebaseApp();
   if (!app) return null;
 
-  return getMessaging(app).send({
-    token: fcmToken,
-    notification: {
-      title: String(title || ""),
-      body: String(body || "")
-    },
-    data: stringifyData(data),
-    android: {
-      priority: "high",
+  try {
+    const response = await getMessaging(app).send({
+      token: fcmToken,
       notification: {
-        channelId: String(androidChannelId || "default"),
-        sound: "default",
-        clickAction: "FLUTTER_NOTIFICATION_CLICK"
+        title: String(title || ""),
+        body: String(body || "")
+      },
+      data: stringifyData(data),
+      android: {
+        priority: "high",
+        notification: {
+          channelId: String(androidChannelId || "default"),
+          sound: "default",
+          clickAction: "FLUTTER_NOTIFICATION_CLICK"
+        }
       }
-    }
-  });
+    });
+
+    console.log("Push sent", {
+      tokenPrefix: `${fcmToken.slice(0, 12)}...`,
+      title: String(title || ""),
+      body: String(body || ""),
+      androidChannelId: String(androidChannelId || "default")
+    });
+    return response;
+  } catch (error) {
+    console.error("Push failed", {
+      tokenPrefix: `${fcmToken.slice(0, 12)}...`,
+      title: String(title || ""),
+      body: String(body || ""),
+      androidChannelId: String(androidChannelId || "default"),
+      error: error.message
+    });
+    throw error;
+  }
 }
 
 export function sendIncomingCallPush({
