@@ -71,6 +71,7 @@ router.post("/:messageId/forward", authRequired, async (req, res) => {
             senderId: req.user.id,
             receiverId: message.receiverId,
             chatId: req.user.id,
+            messageId: message.id,
             message:
               message.text ||
               message.mediaName ||

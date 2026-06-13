@@ -22,7 +22,8 @@ async function pushMessageToReceiver({
   sender,
   receiverId,
   messageText,
-  chatId
+  chatId,
+  messageId
 }) {
   if (!receiverId || String(sender.id) === String(receiverId)) return;
 
@@ -36,6 +37,7 @@ async function pushMessageToReceiver({
       senderId: sender.id,
       receiverId,
       chatId,
+      messageId,
       message: messageText
     });
   } catch (error) {
@@ -219,7 +221,8 @@ export function setupSocket(io) {
         sender: user,
         receiverId,
         messageText: messageText || mediaName || messageType,
-        chatId: user.id
+        chatId: user.id,
+        messageId: payload.id
       });
 
       socket.emit("private-message", payload);

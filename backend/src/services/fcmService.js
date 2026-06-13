@@ -75,7 +75,7 @@ export async function sendPushNotification({
       }
     });
 
-    console.log("Push sent", {
+    console.log("push sent", {
       tokenPrefix: `${fcmToken.slice(0, 12)}...`,
       title: String(title || ""),
       body: String(body || ""),
@@ -83,7 +83,7 @@ export async function sendPushNotification({
     });
     return response;
   } catch (error) {
-    console.error("Push failed", {
+    console.error("push failed", {
       tokenPrefix: `${fcmToken.slice(0, 12)}...`,
       title: String(title || ""),
       body: String(body || ""),
@@ -104,19 +104,22 @@ export function sendIncomingCallPush({
   isVideoCall
 }) {
   const videoCall = Boolean(isVideoCall);
+  const data = {
+    type: String("incoming_call"),
+    callerId: String(callerId ?? ""),
+    callerName: String(callerName ?? ""),
+    receiverId: String(receiverId ?? ""),
+    callId: String(callId ?? ""),
+    channelName: String(channelName ?? ""),
+    isVideoCall: String(videoCall)
+  };
+  console.log("FCM call payload data", data);
+
   return sendPushNotification({
     token: fcmToken,
     title: videoCall ? "Incoming video call" : "Incoming voice call",
     body: `${callerName || "Zee Talk user"} is calling you`,
-    data: {
-      type: "incoming_call",
-      callerId,
-      callerName,
-      receiverId,
-      callId,
-      channelName,
-      isVideoCall: videoCall
-    },
+    data,
     androidChannelId: "calls"
   });
 }
@@ -127,19 +130,25 @@ export function sendMessagePush({
   senderId,
   receiverId,
   chatId,
+  messageId,
   message
 }) {
+  const data = {
+    type: String("chat_message"),
+    chatId: String(chatId ?? ""),
+    senderId: String(senderId ?? ""),
+    receiverId: String(receiverId ?? ""),
+    senderName: String(senderName ?? ""),
+    messageId: String(messageId ?? ""),
+    message: String(message ?? "")
+  };
+  console.log("FCM chat payload data", data);
+
   return sendPushNotification({
     token: fcmToken,
     title: senderName || "Zee Talk",
     body: message || "New message",
-    data: {
-      type: "chat_message",
-      senderId,
-      receiverId,
-      chatId,
-      message
-    },
+    data,
     androidChannelId: "messages"
   });
 }
