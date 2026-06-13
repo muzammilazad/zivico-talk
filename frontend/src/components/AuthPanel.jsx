@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { MessageCircle } from "lucide-react";
 import { api } from "../lib/api";
 
 export default function AuthPanel({ onAuth }) {
@@ -33,7 +32,7 @@ export default function AuthPanel({ onAuth }) {
       <section className="auth-panel">
         <div className="brand-lockup">
           <span className="brand-mark">
-            <MessageCircle size={28} />
+            <img src="/zee_talk_icon.png" alt="Zee Talk" />
           </span>
           <div>
             <h1>Zee Talk</h1>

@@ -317,11 +317,13 @@ export default function ChatWindow({
   }
 
   function renderMessageContent(message) {
-    const url = mediaSrc(apiUrl, message.mediaUrl);
+    const url = mediaSrc(apiUrl, message.mediaUrl || message.fileUrl || message.audioUrl || message.media?.url);
+    const fileName = message.fileName || message.mediaName;
+    const durationSeconds = message.durationSeconds || message.mediaDurationSeconds;
     if (message.type === "image" && url) {
       return (
         <>
-          <img className="message-image" src={url} alt={message.mediaName || "Shared image"} />
+          <img className="message-image" src={url} alt={fileName || "Shared image"} />
           {message.text && <p>{message.text}</p>}
         </>
       );
@@ -330,7 +332,7 @@ export default function ChatWindow({
       return (
         <span className="voice-message">
           <audio className="voice-note" controls src={url} />
-          {message.mediaDurationSeconds ? <small>{formatDuration(message.mediaDurationSeconds)}</small> : null}
+          {durationSeconds ? <small>{formatDuration(durationSeconds)}</small> : null}
         </span>
       );
     }
@@ -338,7 +340,7 @@ export default function ChatWindow({
       return (
         <a className="file-message" href={url} target="_blank" rel="noreferrer">
           <FileUp size={18} />
-          <span>{message.mediaName || "Open file"}</span>
+          <span>{fileName || "Open file"}</span>
         </a>
       );
     }

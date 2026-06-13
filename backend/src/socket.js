@@ -16,6 +16,7 @@ import {
 const onlineUsers = new Map();
 const activeCalls = new Map();
 const CALL_TIMEOUT_MS = 30_000;
+const ALLOWED_MESSAGE_TYPES = new Set(["text", "image", "file", "voice", "video", "call"]);
 
 async function pushMessageToReceiver({
   sender,
@@ -145,18 +146,35 @@ export function setupSocket(io) {
         clientId,
         type,
         mediaUrl,
+        fileUrl,
+        audioUrl,
+        media,
         mediaName,
+        fileName,
+        fileSize,
         mediaMimeType,
+        mimeType,
         mediaDurationSeconds,
+        durationSeconds,
+        forwarded,
         replyToMessageId
       },
       ack
     ) {
       const receiverRoom = String(receiverId);
       const messageText = String(text || message || "").trim();
-      const messageType = type || (mediaUrl ? "file" : "text");
-      if (!receiverId || (!messageText && !mediaUrl)) {
-        ack?.({ ok: false, message: "receiverId and message text or media are required" });
+      const resolvedMediaUrl = mediaUrl || fileUrl || audioUrl || media?.url || "";
+      const messageType = type || (audioUrl ? "voice" : resolvedMediaUrl ? "file" : "text");
+      if (!receiverId) {
+        ack?.({ ok: false, message: "receiverId is required" });
+        return;
+      }
+      if (!messageText && !resolvedMediaUrl) {
+        ack?.({ ok: false, message: "At least one of text, mediaUrl, fileUrl, audioUrl, or media.url is required" });
+        return;
+      }
+      if (!ALLOWED_MESSAGE_TYPES.has(messageType)) {
+        ack?.({ ok: false, message: "Unsupported message type" });
         return;
       }
 
@@ -168,10 +186,12 @@ export function setupSocket(io) {
         type: messageType,
         text: messageText,
         message: messageText,
-        mediaUrl,
-        mediaName,
-        mediaMimeType,
-        mediaDurationSeconds,
+        mediaUrl: resolvedMediaUrl,
+        mediaName: fileName || mediaName,
+        fileSize,
+        mediaMimeType: mimeType || mediaMimeType,
+        mediaDurationSeconds: durationSeconds || mediaDurationSeconds,
+        isForwarded: forwarded,
         replyToMessageId,
         createdAt: new Date().toISOString(),
         timestamp: new Date().toISOString(),

@@ -1,18 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import express from "express";
 import multer from "multer";
 import { v4 as uuid } from "uuid";
 import { authRequired } from "../middleware/auth.js";
 import { saveMediaFile, updateUserAvatar } from "../services/store.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const uploadDir = path.resolve(__dirname, "../../uploads");
+const uploadDir = path.join(process.cwd(), "uploads");
 
 fs.mkdirSync(uploadDir, { recursive: true });
 
+// TODO: Move media uploads to Cloudinary, Supabase, or Firebase Storage for production.
 const allowedMimeTypes = new Set([
   "image/jpeg",
   "image/png",
@@ -34,8 +32,12 @@ const allowedMimeTypes = new Set([
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
   filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname || "");
-    cb(null, `${uuid()}${ext}`);
+    const originalName = path.basename(file.originalname || "file");
+    const sanitizedName = originalName
+      .normalize("NFKD")
+      .replace(/[^\w.-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "file";
+    cb(null, `${Date.now()}-${sanitizedName}`);
   }
 });
 
@@ -52,11 +54,23 @@ const router = express.Router();
 
 router.post("/", authRequired, upload.single("file"), async (req, res) => {
   if (!req.file) return res.status(400).json({ message: "file is required" });
+  console.log("upload received", {
+    uploaderId: req.user.id,
+    fileName: req.file.originalname,
+    mimeType: req.file.mimetype,
+    size: req.file.size
+  });
+
   if (req.body.purpose === "avatar" && !req.file.mimetype.startsWith("image/")) {
     return res.status(400).json({ message: "Profile image must be an image file" });
   }
 
-  const url = `/uploads/${req.file.filename}`;
+  const relativeUrl = `/uploads/${req.file.filename}`;
+  const publicBaseUrl = String(process.env.PUBLIC_API_URL || `${req.protocol}://${req.get("host")}`)
+    .replace(/\/+$/, "");
+  const url = `${publicBaseUrl}${relativeUrl}`;
+  console.log("file saved", { path: req.file.path, url: relativeUrl });
+
   const media = await saveMediaFile({
     id: uuid(),
     uploaderId: req.user.id,
@@ -70,6 +84,7 @@ router.post("/", authRequired, upload.single("file"), async (req, res) => {
     await updateUserAvatar(req.user.id, url);
   }
 
+  console.log("public URL returned", { url: media.url });
   return res.status(201).json({
     id: media.id,
     url: media.url,

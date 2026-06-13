@@ -80,6 +80,7 @@ model Message {
   mediaUrl      String?
   mediaName     String?
   mediaMimeType String?
+  fileSize      Int?
   mediaDurationSeconds Int?
   replyToMessageId String?
   isForwarded Boolean @default(false)

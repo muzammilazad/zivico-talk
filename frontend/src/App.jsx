@@ -105,8 +105,16 @@ function normalizeMessage(message) {
     return message;
   }
 
+  const mediaUrl = message.mediaUrl || message.fileUrl || message.audioUrl || message.media?.url || "";
   return {
     ...message,
+    mediaUrl,
+    fileUrl: message.fileUrl || (message.type === "file" ? mediaUrl : ""),
+    audioUrl: message.audioUrl || (message.type === "voice" ? mediaUrl : ""),
+    mediaName: message.mediaName || message.fileName || "",
+    mediaMimeType: message.mediaMimeType || message.mimeType || "",
+    mediaDurationSeconds: message.mediaDurationSeconds || message.durationSeconds || null,
+    isForwarded: message.isForwarded ?? message.forwarded ?? false,
     reactions: message.reactions || [],
     type: message.type || "message",
     text: getMessageText(message),
@@ -1259,9 +1267,15 @@ export default function App() {
         type,
         text: "",
         mediaUrl: media.url,
+        fileUrl: type === "file" ? media.url : null,
+        audioUrl: type === "voice" ? media.url : null,
         mediaName: media.fileName,
+        fileName: media.fileName,
+        fileSize: media.size,
         mediaMimeType: media.mimeType,
+        mimeType: media.mimeType,
         mediaDurationSeconds: options.mediaDurationSeconds || null,
+        durationSeconds: options.mediaDurationSeconds || null,
         replyToMessageId: replyToMessage?.id || null,
         replyToMessage: replyToMessage || null,
         createdAt: new Date().toISOString(),
@@ -1278,9 +1292,15 @@ export default function App() {
         type,
         text: "",
         mediaUrl: media.url,
+        fileUrl: type === "file" ? media.url : null,
+        audioUrl: type === "voice" ? media.url : null,
         mediaName: media.fileName,
+        fileName: media.fileName,
+        fileSize: media.size,
         mediaMimeType: media.mimeType,
+        mimeType: media.mimeType,
         mediaDurationSeconds: options.mediaDurationSeconds || null,
+        durationSeconds: options.mediaDurationSeconds || null,
         replyToMessageId: replyToMessage?.id || null,
         clientId
       });
@@ -1483,7 +1503,9 @@ export default function App() {
           }}
         />
         <div className="brand-top">
-          <span className="brand-mark small">ZT</span>
+          <span className="brand-mark small">
+            <img src="/zee_talk_icon.png" alt="Zee Talk" />
+          </span>
           <span>
             <strong>Zee Talk</strong>
             <small>{currentUser.name}</small>

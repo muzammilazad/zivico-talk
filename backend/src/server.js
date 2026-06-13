@@ -53,8 +53,9 @@ const corsOptions = {
 };
 
 app.use(cors({ origin: "*" }));
+app.set("trust proxy", 1);
 app.use(express.json());
-app.use("/uploads", express.static(path.resolve(__dirname, "../uploads")));
+app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true, name: "Zivico Talk API" });

@@ -34,6 +34,7 @@ function normalizeContactRequest(request) {
 
 function normalizeMessage(message) {
   if (!message) return null;
+  const mediaUrl = message.mediaUrl || null;
   const replyToMessage = message.replyToMessage
     ? {
         id: message.replyToMessage.id,
@@ -43,13 +44,28 @@ function normalizeMessage(message) {
         text: message.replyToMessage.text,
         mediaName: message.replyToMessage.mediaName,
         mediaUrl: message.replyToMessage.mediaUrl,
+        fileUrl: message.replyToMessage.type === "file" ? message.replyToMessage.mediaUrl : null,
+        audioUrl: message.replyToMessage.type === "voice" ? message.replyToMessage.mediaUrl : null,
+        fileName: message.replyToMessage.mediaName,
+        fileSize: message.replyToMessage.fileSize,
         mediaMimeType: message.replyToMessage.mediaMimeType,
-        mediaDurationSeconds: message.replyToMessage.mediaDurationSeconds
+        mimeType: message.replyToMessage.mediaMimeType,
+        mediaDurationSeconds: message.replyToMessage.mediaDurationSeconds,
+        durationSeconds: message.replyToMessage.mediaDurationSeconds
       }
     : null;
 
   return {
     ...message,
+    mediaUrl,
+    fileUrl: message.type === "file" ? mediaUrl : null,
+    audioUrl: message.type === "voice" ? mediaUrl : null,
+    fileName: message.mediaName || null,
+    fileSize: message.fileSize ?? null,
+    mimeType: message.mediaMimeType || null,
+    durationSeconds: message.mediaDurationSeconds || null,
+    forwarded: Boolean(message.isForwarded),
+    media: mediaUrl ? { url: mediaUrl } : null,
     text: message.isDeletedForEveryone ? "" : message.text,
     reactions: message.reactions || [],
     replyToMessage,
@@ -383,6 +399,7 @@ export async function saveMessage(message) {
       mediaUrl: message.mediaUrl || null,
       mediaName: message.mediaName || null,
       mediaMimeType: message.mediaMimeType || null,
+      fileSize: message.fileSize ? Number(message.fileSize) : null,
       mediaDurationSeconds: message.mediaDurationSeconds ? Number(message.mediaDurationSeconds) : null,
       replyToMessageId: message.replyToMessageId || null,
       isForwarded: Boolean(message.isForwarded),
@@ -437,6 +454,7 @@ export async function deleteMessage({ messageId, userId, scope }) {
         mediaUrl: null,
         mediaName: null,
         mediaMimeType: null,
+        fileSize: null,
         mediaDurationSeconds: null
       },
       include: messageInclude
@@ -600,6 +618,7 @@ export async function forwardMessage({ messageId, senderId, receiverIds = [] }) 
           mediaUrl: original.mediaUrl,
           mediaName: original.mediaName,
           mediaMimeType: original.mediaMimeType,
+          fileSize: original.fileSize,
           mediaDurationSeconds: original.mediaDurationSeconds,
           isForwarded: true,
           status: "sent"
